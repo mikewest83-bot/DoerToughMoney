@@ -1,7 +1,15 @@
-import { defineConfig } from "vite";
-import react from "@vitejs/plugin-react";
+export default function App() {
 
-export default defineConfig({
-  plugins: [react()],
-  server: { port: 5173 },
-});
+  return (
+
+    <div style={{ padding: "2rem", fontFamily: "Arial, sans-serif" }}>
+
+      <h1>Even App</h1>
+
+      <p>Your React app is running successfully.</p>
+
+    </div>
+
+  );
+
+}
