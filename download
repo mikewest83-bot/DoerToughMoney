@@ -1,0 +1,13 @@
+run = "bash replit-run.sh"
+modules = ["nodejs-20"]
+
+[env]
+SERVE_WEB = "1"
+
+[[ports]]
+localPort = 4000
+externalPort = 80
+
+[deployment]
+run = ["bash", "replit-run.sh"]
+deploymentTarget = "cloudrun"
