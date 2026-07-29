@@ -82,8 +82,8 @@ function Avatar({ name, size = 44 }) {
 }
 
 // ── Auth screen ──────────────────────────────────────────
-function Auth({ onDone }) {
-  const [mode, setMode] = useState("login");
+function Auth({ onDone, initialMode = "login" }) {
+  const [mode, setMode] = useState(initialMode);
   const [form, setForm] = useState({ name: "", handle: "", email: "", password: "" });
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
@@ -221,7 +221,7 @@ function PayPage({ slug }) {
   );
 }
 
-function Wallet() {
+function Wallet({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [feed, setFeed] = useState([]);
@@ -336,7 +336,7 @@ function Wallet() {
   const signOut = () => { setToken(null); setUser(null); setFeed([]); };
 
   if (!ready) return <div style={{ minHeight: "100vh", background: C.canvas }}>{fontStyle}</div>;
-  if (!user) return <Auth onDone={(u) => { setUser(u); refresh(); }} />;
+  if (!user) return <Auth onDone={(u) => { setUser(u); refresh(); }} initialMode={initialAuthMode} />;
 
   const balance = (user.balanceCents || 0) / 100;
 
@@ -557,8 +557,9 @@ const iconBtn = { background: "none", border: "none", padding: 4, cursor: "point
 
 export default function App() {
   const path = window.location.pathname;
+  const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
   const screen = path.startsWith("/pay/")
     ? <PayPage slug={decodeURIComponent(path.slice(5))} />
-    : <Wallet />;
+    : <Wallet initialAuthMode={isSignup ? "register" : "login"} />;
   return <>{screen}<IosInstallBanner /></>;
 }
