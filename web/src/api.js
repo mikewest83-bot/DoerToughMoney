@@ -39,11 +39,6 @@ export const api = {
   users: (q) => req(`/api/users?q=${encodeURIComponent(q || "")}`),
   pay: (b) => req("/api/pay", { method: "POST", body: b, idempotent: true }),
   request: (b) => req("/api/request", { method: "POST", body: b, idempotent: true }),
-  topup: (b) => req("/api/topup", { method: "POST", body: b, idempotent: true }),
-  bankLink: () => req("/api/bank/link", { method: "POST" }),
-  cashout: (b) => req("/api/cashout", { method: "POST", body: b, idempotent: true }),
-  createLink: (b) => req("/api/links", { method: "POST", body: b }),
-  listLinks: () => req("/api/links"),
-  getLink: (slug) => req(`/api/links/${encodeURIComponent(slug)}`),
-  linkCheckout: (slug, b) => req(`/api/links/${encodeURIComponent(slug)}/checkout`, { method: "POST", body: b }),
+  bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),
+  bankVerify: (b) => req("/api/bank/verify", { method: "POST", body: b }),
 };

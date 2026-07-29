@@ -1,5 +1,4 @@
 import "dotenv/config";
-import { randomUUID } from "crypto";
 import path from "path";
 import { fileURLToPath } from "url";
 import express from "express";
@@ -8,16 +7,18 @@ import cors from "cors";
 import rateLimit from "express-rate-limit";
 
 import { register, login, authRequired, publicUser } from "./auth.js";
-import {
-  getUserById, getUserByHandle, searchUsers,
-  transfer, logRequest, reservePayout, attachPayoutProviderIds,
-  completePayout, failAndRestorePayout, feedForUser,
-  createPaymentLink, getPaymentLinkWithPayee, listPaymentLinks, deactivatePaymentLink,
+import prisma, {
+  getUserById, getUserByHandle, searchUsers, feedForUser,
+  createTransferRecord, logRequest, newIdempotencyKey,
+  setFundingSource, setFundingSourceVerified, setKycStatusByCustomerUrlSuffix,
 } from "./db.js";
-import { onboardingLink, topupCheckout, cashOut, linkCheckout, handleWebhook } from "./stripe.js";
+import {
+  dwollaWebhook, checkVelocity, VelocityError, createTransfer,
+  addBankManual, initiateMicroDeposits, verifyMicroDeposits,
+} from "./dwolla/index.js";
 import { idempotency } from "./idempotency.js";
-import { validateAmount, shapeTxn, computeFee, resolveLinkAmount, linkUrl } from "./logic.js";
-import { validateProductionConfig, feeParams, PLATFORM_USER_ID } from "./config.js";
+import { validateAmount, shapeTxn, computeFee } from "./logic.js";
+import { validateProductionConfig, feeParams } from "./config.js";
 
 validateProductionConfig();
 
@@ -25,8 +26,19 @@ const app = express();
 app.set("trust proxy", 1); // behind Railway's proxy — needed for correct rate-limit IPs
 app.use(cors({ origin: process.env.WEB_ORIGIN || "http://localhost:5173" }));
 
-// Stripe webhook needs the RAW body, so mount it BEFORE express.json() and the limiter.
-app.post("/api/stripe/webhook", express.raw({ type: "application/json" }), handleWebhook);
+// Dwolla webhook needs the RAW body, so mount it BEFORE express.json() and the limiter.
+app.post(
+  "/webhooks/dwolla",
+  express.raw({ type: "application/json" }),
+  dwollaWebhook(prisma, {
+    onCustomerVerified: async (dwollaCustomerId) => {
+      await setKycStatusByCustomerUrlSuffix(dwollaCustomerId, "VERIFIED");
+    },
+    onDocumentNeeded: async (dwollaCustomerId) => {
+      await setKycStatusByCustomerUrlSuffix(dwollaCustomerId, "DOCUMENT");
+    },
+  })
+);
 
 app.use(express.json());
 
@@ -39,8 +51,6 @@ const authLimiter = limit(12, "Too many attempts. Wait a minute and try again.")
 const moneyLimiter = limit(30, "Slow down a moment and try again.");
 
 app.use("/api", apiLimiter);
-
-const idemOf = (req) => req.headers["idempotency-key"] || randomUUID();
 
 // Public: lets the client preview the platform fee before a payment.
 app.get("/api/config", (_req, res) => {
@@ -67,7 +77,37 @@ app.get("/api/users", authRequired, async (req, res) => {
   res.json({ users: await searchUsers(q, req.user.id) });
 });
 
-// ── pay (internal ledger transfer) ───────────────────────
+// ── link a bank (manual routing/account + micro-deposits) ──
+app.post("/api/bank/link", authRequired, moneyLimiter, async (req, res) => {
+  const { routingNumber, accountNumber, bankAccountType, name } = req.body || {};
+  if (!routingNumber || !accountNumber || !bankAccountType)
+    return res.status(400).json({ error: "Routing number, account number, and account type are required." });
+  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
+
+  const fundingSourceUrl = await addBankManual(req.user.dwollaCustomerUrl, { routingNumber, accountNumber, bankAccountType, name });
+  await initiateMicroDeposits(fundingSourceUrl);
+  await setFundingSource(req.user.id, fundingSourceUrl);
+  res.json({ ok: true });
+});
+
+// ── verify a bank via the two micro-deposit amounts ─────────
+app.post("/api/bank/verify", authRequired, moneyLimiter, async (req, res) => {
+  const { amount1, amount2 } = req.body || {};
+  const a1 = validateAmount(amount1);
+  const a2 = validateAmount(amount2);
+  if (!a1.ok || !a2.ok) return res.status(400).json({ error: "Enter both micro-deposit amounts." });
+  if (!req.user.fundingSourceUrl) return res.status(400).json({ error: "Link a bank account first." });
+
+  try {
+    await verifyMicroDeposits(req.user.fundingSourceUrl, a1.cents, a2.cents);
+  } catch {
+    return res.status(400).json({ error: "Those amounts don't match. Check your bank statement and try again." });
+  }
+  await setFundingSourceVerified(req.user.id);
+  res.json({ user: publicUser(await getUserById(req.user.id)) });
+});
+
+// ── pay (real bank-to-bank transfer via Dwolla) ─────────────
 app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) => {
   const { handle, amount, note } = req.body || {};
   const v = validateAmount(amount);
@@ -77,19 +117,38 @@ app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) =
   if (!recipient) return res.status(404).json({ error: "No one with that handle." });
   if (recipient.id === req.user.id) return res.status(400).json({ error: "You can't pay yourself." });
 
+  if (req.user.kycStatus !== "VERIFIED" || !req.user.fundingSourceVerified)
+    return res.status(403).json({ error: "Finish identity verification and link a bank before sending money." });
+  if (!recipient.fundingSourceVerified)
+    return res.status(400).json({ error: `${recipient.name} hasn't linked a verified bank account yet.` });
+
   const feeCents = computeFee(v.cents, feeParams());
 
   try {
-    await transfer({ fromId: req.user.id, toId: recipient.id, cents: v.cents, note, feeCents, platformId: PLATFORM_USER_ID });
+    await checkVelocity(prisma, { userId: req.user.id, amountCents: v.cents });
   } catch (e) {
-    if (e.message === "INSUFFICIENT")
-      return res.status(400).json({ error: "Not enough to cover this. Add money or lower the amount." });
+    if (e instanceof VelocityError) return res.status(429).json({ error: "You've hit a sending limit. Try again later or with a smaller amount." });
     throw e;
   }
-  res.json({ user: publicUser(await getUserById(req.user.id)), feeCents, amountCents: v.cents });
+
+  const { dwollaTransferUrl, dwollaTransferId, idempotencyKey } = await createTransfer({
+    sourceFundingSourceUrl: req.user.fundingSourceUrl,
+    destinationFundingSourceUrl: recipient.fundingSourceUrl,
+    amountCents: v.cents,
+    feeCents,
+    feeChargeToCustomerUrl: feeCents > 0 ? req.user.dwollaCustomerUrl : undefined,
+    idempotencyKey: newIdempotencyKey(),
+  });
+
+  await createTransferRecord({
+    idempotencyKey, providerRef: dwollaTransferId, providerUrl: dwollaTransferUrl,
+    senderId: req.user.id, recipientId: recipient.id, amountCents: v.cents, feeCents, note,
+  });
+
+  res.json({ user: publicUser(req.user), feeCents, amountCents: v.cents });
 });
 
-// ── request money ────────────────────────────────────────
+// ── request money (no Dwolla — just a note on the feed) ────
 app.post("/api/request", authRequired, moneyLimiter, idempotency, async (req, res) => {
   const { handle, amount, note } = req.body || {};
   const v = validateAmount(amount);
@@ -101,132 +160,11 @@ app.post("/api/request", authRequired, moneyLimiter, idempotency, async (req, re
   res.json({ ok: true });
 });
 
-// ── add funds (Stripe Checkout) ──────────────────────────
-app.post("/api/topup", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const v = validateAmount(req.body?.amount);
-  if (!v.ok) return res.status(400).json({ error: v.error });
-  const url = await topupCheckout(req.user, v.cents, idemOf(req));
-  res.json({ url });
-});
-
-// ── connect a bank for cash-outs ─────────────────────────
-app.post("/api/bank/link", authRequired, moneyLimiter, async (req, res) => {
-  const url = await onboardingLink(req.user);
-  res.json({ url });
-});
-
-// ── cash out to bank ─────────────────────────────────────
-app.post("/api/cashout", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const v = validateAmount(req.body?.amount);
-  if (!v.ok) return res.status(400).json({ error: v.error });
-  if (!req.user.stripeAccountId)
-    return res.status(400).json({ error: "Connect a bank account first." });
-
-  let payoutTxn;
-  try {
-    payoutTxn = await reservePayout({ userId: req.user.id, cents: v.cents });
-  } catch (e) {
-    if (e.message === "INSUFFICIENT")
-      return res.status(400).json({ error: "Not enough in your balance for that cash-out." });
-    throw e;
-  }
-
-  try {
-    const ids = await cashOut(req.user, v.cents, idemOf(req), payoutTxn.id);
-    await attachPayoutProviderIds({ transactionId: payoutTxn.id, ...ids });
-    // Stripe may later send payout.failed/canceled; payout.paid finalizes it.
-    if (!process.env.STRIPE_WEBHOOK_SECRET) await completePayout({ transactionId: payoutTxn.id });
-  } catch (e) {
-    await failAndRestorePayout({ transactionId: payoutTxn.id });
-    throw e;
-  }
-  res.json({ user: publicUser(await getUserById(req.user.id)) });
-});
-
-
-// ── pay-me links ─────────────────────────────────────────
-const WEB_ORIGIN = process.env.WEB_ORIGIN || "http://localhost:5173";
-
-// Create a shareable link. Optional fixed amount; omit for payer-chooses.
-app.post("/api/links", authRequired, moneyLimiter, async (req, res) => {
-  const { amount, note } = req.body || {};
-  let amountCents = null;
-  if (amount !== undefined && amount !== null && amount !== "") {
-    const v = validateAmount(amount);
-    if (!v.ok) return res.status(400).json({ error: v.error });
-    amountCents = v.cents;
-  }
-  const link = await createPaymentLink({ userId: req.user.id, amountCents, note: (note || "").slice(0, 140) });
-  res.json({ link: { slug: link.slug, amountCents: link.amountCents, note: link.note, active: link.active }, url: linkUrl(WEB_ORIGIN, link.slug) });
-});
-
-app.get("/api/links", authRequired, async (req, res) => {
-  const links = await listPaymentLinks(req.user.id);
-  res.json({ links: links.map((l) => ({ slug: l.slug, amountCents: l.amountCents, note: l.note, active: l.active, url: linkUrl(WEB_ORIGIN, l.slug) })) });
-});
-
-app.post("/api/links/:slug/deactivate", authRequired, async (req, res) => {
-  const link = await getPaymentLinkWithPayee(req.params.slug);
-  if (!link) return res.status(404).json({ error: "Link not found." });
-  await deactivatePaymentLink({ id: link.id, userId: req.user.id });
-  res.json({ ok: true });
-});
-
-// Public: fetch a link so the pay page can render (no account required).
-app.get("/api/links/:slug", async (req, res) => {
-  const link = await getPaymentLinkWithPayee(req.params.slug);
-  if (!link || !link.active) return res.status(404).json({ error: "This link is no longer active." });
-  res.json({ link: { slug: link.slug, amountCents: link.amountCents, note: link.note, payee: link.payee } });
-});
-
-// Public: start Checkout for a link. Anyone can pay.
-app.post("/api/links/:slug/checkout", async (req, res) => {
-  const link = await getPaymentLinkWithPayee(req.params.slug);
-  if (!link || !link.active) return res.status(404).json({ error: "This link is no longer active." });
-  const resolved = resolveLinkAmount(link, req.body?.amount);
-  if (!resolved.ok) return res.status(400).json({ error: resolved.error });
-  const feeCents = computeFee(resolved.cents, feeParams());
-  const url = await linkCheckout({ link, payeeId: link.userId, cents: resolved.cents, note: link.note, feeCents });
-  res.json({ url });
-});
-
-const escapeHtml = (s = "") =>
-  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-const CRAWLER_UA = /facebookexternalhit|Twitterbot|Slackbot|LinkedInBot|WhatsApp|TelegramBot|Discordbot|redditbot|Googlebot|Applebot|Pinterest|SkypeUriPreview/i;
-
 // Serve the built web app from the same origin (used on Replit). SPA fallback
-// so client routes like /pay/:slug work on refresh. API + webhook are untouched.
+// so client routes work on refresh. API + webhook are untouched.
 if (process.env.SERVE_WEB) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const dist = path.resolve(__dirname, "../web/dist");
-
-  // Social crawlers don't run JS, so give /pay/:slug a server-rendered OG
-  // preview instead of the SPA shell. Real browsers fall through to below.
-  app.get("/pay/:slug", async (req, res, next) => {
-    if (!CRAWLER_UA.test(req.headers["user-agent"] || "")) return next();
-    const link = await getPaymentLinkWithPayee(req.params.slug);
-    if (!link || !link.active) return next();
-
-    const title = escapeHtml(`Pay ${link.payee?.name || "someone"} on even`);
-    const amountText = link.amountCents ? `$${(link.amountCents / 100).toFixed(2)}` : "any amount";
-    const description = escapeHtml(`${link.note ? link.note + " — " : ""}Send ${amountText} instantly via even.`);
-    const origin = process.env.WEB_ORIGIN || `${req.protocol}://${req.get("host")}`;
-    const url = escapeHtml(`${origin}/pay/${req.params.slug}`);
-    const image = escapeHtml(`${origin}/pwa-512.png`);
-
-    res.set("Content-Type", "text/html").send(`<!doctype html>
-<html><head>
-<meta charset="utf-8">
-<title>${title}</title>
-<meta property="og:title" content="${title}">
-<meta property="og:description" content="${description}">
-<meta property="og:url" content="${url}">
-<meta property="og:type" content="website">
-<meta property="og:image" content="${image}">
-<meta name="twitter:card" content="summary">
-</head><body></body></html>`);
-  });
-
   app.use(express.static(dist));
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
 }

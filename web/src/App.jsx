@@ -1,10 +1,8 @@
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
-  Search, ArrowLeft, Delete, Check, Plus, ArrowUpRight,
-  ArrowDownLeft, Clock, X, LogOut, Building2, Banknote,
-  Link2, Copy, QrCode, Share2,
+  Search, ArrowLeft, Delete, Check, ArrowUpRight,
+  ArrowDownLeft, Clock, X, LogOut, Building2, ShieldCheck, Share2,
 } from "lucide-react";
-import QRCode from "qrcode";
 import { api, setToken, hasToken } from "./api.js";
 
 const C = {
@@ -19,6 +17,11 @@ const AV = ["#5B4DF5", "#12A150", "#E8A33D", "#E5556E", "#2AA6C4", "#8B5CF6", "#
 const initials = (n = "") => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const colorFor = (n = "") => { let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) % AV.length; return AV[h]; };
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const KYC_LABEL = {
+  PENDING: "Verification pending", VERIFIED: "Identity verified", RETRY: "Needs updated info",
+  DOCUMENT: "ID document needed", SUSPENDED: "Account suspended",
+};
 
 const fontStyle = (
   <style>{`
@@ -87,7 +90,10 @@ function Avatar({ name, size = 44 }) {
 // ── Auth screen ──────────────────────────────────────────
 function Auth({ onDone, initialMode = "login" }) {
   const [mode, setMode] = useState(initialMode);
-  const [form, setForm] = useState({ name: "", handle: "", email: "", password: "" });
+  const [form, setForm] = useState({
+    name: "", handle: "", email: "", password: "",
+    address1: "", city: "", state: "", postalCode: "", dateOfBirth: "", ssn: "",
+  });
   const [err, setErr] = useState("");
   const [busy, setBusy] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
@@ -123,6 +129,25 @@ function Auth({ onDone, initialMode = "login" }) {
           {mode === "register" && (<>{field("Full name", "name")}{field("Handle (e.g. @you)", "handle")}</>)}
           {field("Email", "email", "email")}
           {field("Password", "password", "password")}
+
+          {mode === "register" && (<>
+            <p style={{ fontSize: 12, color: C.muted, marginTop: 22, marginBottom: -2, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+              Identity verification
+            </p>
+            <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>
+              Required to send and receive money — even's payment partner runs a one-time identity check.
+            </p>
+            {field("Street address", "address1")}
+            {field("City", "city")}
+            <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ flex: 1 }}>{field("State (e.g. CA)", "state")}</div>
+              <div style={{ flex: 1 }}>{field("ZIP", "postalCode")}</div>
+            </div>
+            {field("Date of birth", "dateOfBirth", "date")}
+            {field("Social Security Number", "ssn")}
+            <p style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Used once to verify your identity — never stored by even.</p>
+          </>)}
+
           {err && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 10 }}>{err}</p>}
           <button onClick={submit} disabled={busy}
             style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
@@ -148,89 +173,6 @@ function Auth({ onDone, initialMode = "login" }) {
 }
 
 // ── Wallet ───────────────────────────────────────────────
-
-// ── shared QR ────────────────────────────────────────────
-function QR({ text, size = 220 }) {
-  const [src, setSrc] = useState("");
-  useEffect(() => {
-    let live = true;
-    QRCode.toDataURL(text, { width: size, margin: 1, color: { dark: "#16151A", light: "#ffffff" } })
-      .then((d) => live && setSrc(d)).catch(() => {});
-    return () => { live = false; };
-  }, [text, size]);
-  return src ? <img src={src} alt="QR code" width={size} height={size} style={{ borderRadius: 12 }} /> : null;
-}
-
-// ── public pay page (no account needed) ──────────────────
-function PayPage({ slug }) {
-  const [link, setLink] = useState(null);
-  const [err, setErr] = useState("");
-  const [amount, setAmount] = useState("");
-  const [busy, setBusy] = useState(false);
-  const done = new URLSearchParams(window.location.search).get("done") === "1";
-
-  useEffect(() => {
-    api.getLink(slug).then(({ link }) => setLink(link)).catch((e) => setErr(e.message));
-  }, [slug]);
-
-  const pay = async () => {
-    setBusy(true); setErr("");
-    try {
-      const body = link.amountCents == null ? { amount } : {};
-      const { url } = await api.linkCheckout(slug, body);
-      window.location.href = url;
-    } catch (e) { setErr(e.message); setBusy(false); }
-  };
-
-  const wrap = { minHeight: "100vh", background: pageBg, display: "flex", flexDirection: "column",
-    justifyContent: "center", alignItems: "center", padding: 24, fontFamily: "Inter, sans-serif", color: C.ink };
-
-  if (done) return (
-    <div style={wrap}>{fontStyle}
-      <div className="pop" style={{ width: 76, height: 76, borderRadius: 999, background: C.greenSoft, display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <Check size={40} color={C.green} strokeWidth={2.5} />
-      </div>
-      <h2 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 700, marginTop: 18, marginBottom: 4 }}>Payment sent</h2>
-      <p style={{ color: C.muted, fontSize: 14.5 }}>Thanks — you're all set.</p>
-    </div>
-  );
-
-  if (err) return <div style={wrap}>{fontStyle}<p style={{ color: C.muted }}>{err}</p></div>;
-  if (!link) return <div style={wrap}>{fontStyle}<p style={{ color: C.muted }}>Loading…</p></div>;
-
-  const fixed = link.amountCents != null;
-  return (
-    <div style={wrap}>{fontStyle}
-      <div style={{ width: "100%", maxWidth: 380, background: C.surface, borderRadius: 24, padding: 24, textAlign: "center", border: `1px solid ${C.line}` }}>
-        <div style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800, fontSize: 24, letterSpacing: "-0.03em" }}>
-          even<span style={{ color: C.brand }}>.</span>
-        </div>
-        <Avatar name={link.payee?.name || "even"} size={56} />
-        <p style={{ fontSize: 16, fontWeight: 600, marginTop: 12 }}>Pay {link.payee?.name}</p>
-        <p style={{ fontSize: 13, color: C.muted, marginTop: 2 }}>{link.payee?.handle}{link.note ? ` · ${link.note}` : ""}</p>
-
-        {fixed ? (
-          <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 44, fontWeight: 700, marginTop: 16 }}>
-            ${money(link.amountCents / 100)}
-          </div>
-        ) : (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 4, marginTop: 16 }}>
-            <span style={{ fontSize: 24, fontWeight: 700, marginBottom: 6, color: C.muted }}>$</span>
-            <input autoFocus value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal" placeholder="0"
-              style={{ fontFamily: "'Space Mono',monospace", fontSize: 40, fontWeight: 700, width: 160, textAlign: "center", border: "none", outline: "none", background: "transparent" }} />
-          </div>
-        )}
-
-        <button onClick={pay} disabled={busy}
-          style={{ width: "100%", marginTop: 20, padding: 15, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
-          {busy ? "…" : "Pay with card"}
-        </button>
-        <p style={{ fontSize: 11.5, color: C.muted, marginTop: 12 }}>Secured by Stripe · no account needed</p>
-      </div>
-    </div>
-  );
-}
-
 function Wallet({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
@@ -279,6 +221,7 @@ function Wallet({ initialAuthMode = "login" }) {
     if (feeCfg.feeCapCents != null) fee = Math.min(fee, feeCfg.feeCapCents);
     return Math.max(0, fee) / 100;
   })();
+  const payEligible = user?.kycStatus === "VERIFIED" && user?.bankVerified;
   const start = (m) => { setMode(m); setStep("who"); setTarget(null); setAmount("0"); setNote(""); setQuery(""); setError(""); setOpen(true); };
   const press = (k) => {
     setError("");
@@ -297,50 +240,37 @@ function Wallet({ initialAuthMode = "login" }) {
     try {
       const body = { handle: target.handle, amount: amountNum, note: note.trim() };
       let paidFee = 0;
-      if (mode === "pay") { const r = await api.pay(body); setUser(r.user); paidFee = (r.feeCents || 0) / 100; }
+      if (mode === "pay") { const r = await api.pay(body); paidFee = (r.feeCents || 0) / 100; }
       else await api.request(body);
       setLast({ mode, who: target.name, amount: amountNum, fee: paidFee, note: note.trim() || (mode === "pay" ? "payment" : "request") });
-      await api.feed().then(({ feed }) => setFeed(feed));
+      await refresh();
       setStep("done");
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
-  const addFunds = async () => {
-    const raw = window.prompt("Add how much? (USD)");
-    if (!raw) return;
-    try { const { url } = await api.topup({ amount: raw }); window.location.href = url; }
-    catch (e) { alert(e.message); }
-  };
-  const connectBank = async () => {
-    try { const { url } = await api.bankLink(); window.location.href = url; }
-    catch (e) { alert(e.message); }
-  };
-  const cashOut = async () => {
-    const raw = window.prompt("Cash out how much to your bank? (USD)");
-    if (!raw) return;
-    try { const { user } = await api.cashout({ amount: raw }); setUser(user); await api.feed().then(({ feed }) => setFeed(feed)); }
-    catch (e) { alert(e.message); }
-  };
-  const [linkOpen, setLinkOpen] = useState(false);
-  const [linkAmount, setLinkAmount] = useState("");
-  const [linkNote, setLinkNote] = useState("");
-  const [createdLink, setCreatedLink] = useState(null);
-  const [linkBusy, setLinkBusy] = useState(false);
-  const [copied, setCopied] = useState(false);
+  // ── bank linking (manual routing/account + micro-deposits) ──
+  const [bankOpen, setBankOpen] = useState(false);
+  const [bankForm, setBankForm] = useState({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" });
+  const [bankBusy, setBankBusy] = useState(false);
+  const [bankErr, setBankErr] = useState("");
 
-  const openLink = () => { setLinkAmount(""); setLinkNote(""); setCreatedLink(null); setCopied(false); setLinkOpen(true); };
-  const makeLink = async () => {
-    setLinkBusy(true);
-    try {
-      const body = {};
-      if (linkAmount) body.amount = linkAmount;
-      if (linkNote.trim()) body.note = linkNote.trim();
-      const { url } = await api.createLink(body);
-      setCreatedLink(url);
-    } catch (e) { alert(e.message); } finally { setLinkBusy(false); }
+  const openBankLink = () => { setBankForm({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" }); setBankErr(""); setBankOpen(true); };
+  const submitBankLink = async () => {
+    setBankBusy(true); setBankErr("");
+    try { await api.bankLink(bankForm); await refresh(); setBankOpen(false); }
+    catch (e) { setBankErr(e.message); } finally { setBankBusy(false); }
   };
-  const copyLink = async () => {
-    try { await navigator.clipboard.writeText(createdLink); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch {}
+
+  const [verifyOpen, setVerifyOpen] = useState(false);
+  const [verifyForm, setVerifyForm] = useState({ amount1: "", amount2: "" });
+  const [verifyBusy, setVerifyBusy] = useState(false);
+  const [verifyErr, setVerifyErr] = useState("");
+
+  const openVerify = () => { setVerifyForm({ amount1: "", amount2: "" }); setVerifyErr(""); setVerifyOpen(true); };
+  const submitVerify = async () => {
+    setVerifyBusy(true); setVerifyErr("");
+    try { const { user } = await api.bankVerify(verifyForm); setUser(user); setVerifyOpen(false); }
+    catch (e) { setVerifyErr(e.message); } finally { setVerifyBusy(false); }
   };
 
   const signOut = () => { setToken(null); setUser(null); setFeed([]); };
@@ -348,7 +278,7 @@ function Wallet({ initialAuthMode = "login" }) {
   if (!ready) return <div style={{ minHeight: "100vh", background: pageBg }}>{fontStyle}</div>;
   if (!user) return <Auth onDone={(u) => { setUser(u); refresh(); }} initialMode={initialAuthMode} />;
 
-  const balance = (user.balanceCents || 0) / 100;
+  const bankStatusLabel = !user.hasBank ? "No bank linked" : user.bankVerified ? "Bank linked ✓" : "Verify your bank";
 
   return (
     <div style={{ minHeight: "100vh", background: pageBg, display: "flex", justifyContent: "center",
@@ -370,21 +300,32 @@ function Wallet({ initialAuthMode = "login" }) {
         <section style={{ padding: "8px 20px 0" }}>
           <div style={{ borderRadius: 24, padding: 20, background: C.ink, color: "#fff" }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <span style={{ color: "#B9B9C6", fontSize: 13, fontWeight: 500 }}>Available balance</span>
+              <span style={{ color: "#B9B9C6", fontSize: 13, fontWeight: 500 }}>Account status</span>
               <span style={{ color: "#B9B9C6", fontSize: 12.5 }}>{user.handle}</span>
             </div>
-            <div style={{ marginTop: 8, display: "flex", alignItems: "flex-end", gap: 3 }}>
-              <span style={{ fontSize: 22, fontWeight: 700, marginBottom: 6 }}>$</span>
-              <span style={{ fontFamily: "'Space Mono',monospace", fontSize: 44, fontWeight: 700, lineHeight: 1, letterSpacing: "-0.02em" }}>
-                {money(balance)}
-              </span>
+            <div style={{ marginTop: 12, display: "flex", alignItems: "center", gap: 8 }}>
+              <ShieldCheck size={18} color={user.kycStatus === "VERIFIED" ? C.green : C.amber} />
+              <span style={{ fontSize: 16, fontWeight: 700 }}>{KYC_LABEL[user.kycStatus] || user.kycStatus}</span>
+            </div>
+            <div style={{ marginTop: 6, display: "flex", alignItems: "center", gap: 8 }}>
+              <Building2 size={18} color={user.bankVerified ? C.green : C.amber} />
+              <span style={{ fontSize: 14.5, color: "#D8D8E2" }}>{bankStatusLabel}</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              <button onClick={addFunds} style={pill}><Plus size={14} /> Add funds</button>
-              <button onClick={cashOut} style={pill}><Banknote size={14} /> Cash out</button>
-              <button onClick={connectBank} style={pill}><Building2 size={14} /> {user.hasBank ? "Bank ✓" : "Add bank"}</button>
+              {!user.hasBank && (
+                <button onClick={openBankLink} style={pill}><Building2 size={14} /> Link bank</button>
+              )}
+              {user.hasBank && !user.bankVerified && (
+                <button onClick={openVerify} style={pill}><Check size={14} /> Verify bank</button>
+              )}
             </div>
           </div>
+
+          {!payEligible && (
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10, textAlign: "center" }}>
+              {user.kycStatus !== "VERIFIED" ? "Finish identity verification" : "Link and verify a bank"} to send money.
+            </p>
+          )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
             <button onClick={() => start("pay")} style={{ ...bigBtn, background: C.brand, color: "#fff" }}>
@@ -394,10 +335,6 @@ function Wallet({ initialAuthMode = "login" }) {
               <ArrowDownLeft size={19} /> Request
             </button>
           </div>
-
-          <button onClick={openLink} style={{ width: "100%", marginTop: 12, padding: "13px 0", borderRadius: 16, border: `1px dashed ${C.line}`, background: "transparent", color: C.brand, fontWeight: 700, fontSize: 14.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" }}>
-            <Link2 size={17} /> Create a pay-me link
-          </button>
         </section>
 
         <section style={{ padding: "24px 20px 32px" }}>
@@ -409,11 +346,11 @@ function Wallet({ initialAuthMode = "login" }) {
                 <Avatar name={t.who} />
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {t.kind === "topup" ? "Added funds" : t.dir === "in" ? t.who
-                      : t.dir === "requested" ? `You requested ${t.who}` : t.dir === "request_due" ? `${t.who} requested you` : t.kind === "payout" ? "Cash out" : `You paid ${t.who}`}
+                    {t.dir === "in" ? t.who
+                      : t.dir === "requested" ? `You requested ${t.who}` : t.dir === "request_due" ? `${t.who} requested you` : `You paid ${t.who}`}
                   </p>
                   <p style={{ margin: 0, fontSize: 13, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {t.note}{t.status === "pending" ? " · pending" : ""}
+                    {t.note}{t.status === "PENDING" ? " · pending" : t.status === "FAILED" ? " · failed" : t.status === "RETURNED" ? " · returned" : ""}
                   </p>
                 </div>
                 <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14.5,
@@ -425,43 +362,63 @@ function Wallet({ initialAuthMode = "login" }) {
           </div>
         </section>
 
-        {linkOpen && (
-          <div onClick={() => setLinkOpen(false)}
+        {bankOpen && (
+          <div onClick={() => setBankOpen(false)}
             style={{ position: "absolute", inset: 0, zIndex: 25, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: "rgba(20,19,26,.4)" }}>
             <div className="sheet-enter" onClick={(e) => e.stopPropagation()}
               style={{ background: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "16px 20px 28px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: 700, fontSize: 15 }}>{createdLink ? "Your pay-me link" : "Create a pay-me link"}</span>
-                <button onClick={() => setLinkOpen(false)} style={iconBtn}><X size={22} /></button>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>Link your bank</span>
+                <button onClick={() => setBankOpen(false)} style={iconBtn}><X size={22} /></button>
               </div>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>
+                We'll send two small deposits to confirm it's yours (instant in sandbox).
+              </p>
+              <div style={{ marginTop: 10 }}>
+                <input value={bankForm.name} onChange={(e) => setBankForm((f) => ({ ...f, name: e.target.value }))} placeholder="Nickname (e.g. Checking)"
+                  style={sheetInput} />
+                <input value={bankForm.routingNumber} onChange={(e) => setBankForm((f) => ({ ...f, routingNumber: e.target.value }))} placeholder="Routing number" inputMode="numeric"
+                  style={sheetInput} />
+                <input value={bankForm.accountNumber} onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder="Account number" inputMode="numeric"
+                  style={sheetInput} />
+                <select value={bankForm.bankAccountType} onChange={(e) => setBankForm((f) => ({ ...f, bankAccountType: e.target.value }))}
+                  style={{ ...sheetInput, appearance: "auto" }}>
+                  <option value="checking">Checking</option>
+                  <option value="savings">Savings</option>
+                </select>
+                {bankErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{bankErr}</p>}
+                <button onClick={submitBankLink} disabled={bankBusy}
+                  style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1 }}>
+                  {bankBusy ? "…" : "Link bank"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
-              {!createdLink ? (
-                <div style={{ marginTop: 8 }}>
-                  <label style={{ fontSize: 12.5, color: C.muted }}>Amount (optional — leave blank to let them choose)</label>
-                  <div style={{ display: "flex", alignItems: "center", gap: 6, borderRadius: 14, padding: "10px 14px", background: C.canvas, marginTop: 6 }}>
-                    <span style={{ fontWeight: 700, color: C.muted }}>$</span>
-                    <input value={linkAmount} onChange={(e) => setLinkAmount(e.target.value)} inputMode="decimal" placeholder="0.00"
-                      style={{ border: "none", outline: "none", background: "transparent", fontSize: 16, width: "100%" }} />
-                  </div>
-                  <input value={linkNote} onChange={(e) => setLinkNote(e.target.value)} placeholder="What's it for? (optional)"
-                    style={{ width: "100%", border: "none", outline: "none", background: C.canvas, borderRadius: 14, padding: "10px 14px", fontSize: 14, marginTop: 10 }} />
-                  <button onClick={makeLink} disabled={linkBusy}
-                    style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: linkBusy ? 0.6 : 1 }}>
-                    {linkBusy ? "…" : "Create link"}
-                  </button>
-                </div>
-              ) : (
-                <div style={{ marginTop: 12, display: "flex", flexDirection: "column", alignItems: "center" }}>
-                  <QR text={createdLink} size={200} />
-                  <div style={{ display: "flex", alignItems: "center", gap: 8, width: "100%", marginTop: 16, background: C.canvas, borderRadius: 12, padding: "10px 12px" }}>
-                    <span style={{ fontSize: 12.5, color: C.ink, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", flex: 1 }}>{createdLink}</span>
-                    <button onClick={copyLink} style={{ display: "flex", alignItems: "center", gap: 4, border: "none", background: C.brand, color: "#fff", borderRadius: 8, padding: "7px 10px", fontSize: 12.5, fontWeight: 600, cursor: "pointer" }}>
-                      {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
-                    </button>
-                  </div>
-                  <p style={{ fontSize: 12, color: C.muted, marginTop: 12, textAlign: "center" }}>Share it anywhere. Anyone can pay by card — the money lands in your balance.</p>
-                </div>
-              )}
+        {verifyOpen && (
+          <div onClick={() => setVerifyOpen(false)}
+            style={{ position: "absolute", inset: 0, zIndex: 25, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: "rgba(20,19,26,.4)" }}>
+            <div className="sheet-enter" onClick={(e) => e.stopPropagation()}
+              style={{ background: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "16px 20px 28px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>Verify your bank</span>
+                <button onClick={() => setVerifyOpen(false)} style={iconBtn}><X size={22} /></button>
+              </div>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>
+                Enter the two small deposit amounts from your bank statement (e.g. 0.03 and 0.09).
+              </p>
+              <div style={{ marginTop: 10 }}>
+                <input value={verifyForm.amount1} onChange={(e) => setVerifyForm((f) => ({ ...f, amount1: e.target.value }))} placeholder="Amount 1 (e.g. 0.03)" inputMode="decimal"
+                  style={sheetInput} />
+                <input value={verifyForm.amount2} onChange={(e) => setVerifyForm((f) => ({ ...f, amount2: e.target.value }))} placeholder="Amount 2 (e.g. 0.09)" inputMode="decimal"
+                  style={sheetInput} />
+                {verifyErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{verifyErr}</p>}
+                <button onClick={submitVerify} disabled={verifyBusy}
+                  style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: verifyBusy ? 0.6 : 1 }}>
+                  {verifyBusy ? "…" : "Verify"}
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -501,7 +458,18 @@ function Wallet({ initialAuthMode = "login" }) {
                 </div>
               )}
 
-              {step === "amount" && (
+              {step === "amount" && mode === "pay" && !payEligible && (
+                <div style={{ padding: "24px 24px 40px", textAlign: "center" }}>
+                  <p style={{ color: C.muted, fontSize: 14.5 }}>
+                    {user.kycStatus !== "VERIFIED"
+                      ? "Finish identity verification before sending money."
+                      : "Link and verify a bank account before sending money."}
+                  </p>
+                  <button onClick={() => setOpen(false)} style={{ borderRadius: 16, padding: 14, marginTop: 16, width: "100%", border: "none", background: C.ink, color: "#fff", fontWeight: 700, fontSize: 15.5 }}>Got it</button>
+                </div>
+              )}
+
+              {step === "amount" && (mode !== "pay" || payEligible) && (
                 <div style={{ padding: "4px 20px 24px", display: "flex", flexDirection: "column" }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: "center", marginTop: 4 }}>
                     <Avatar name={target.name} size={30} />
@@ -564,6 +532,7 @@ const pill = { display: "flex", alignItems: "center", gap: 5, borderRadius: 999,
 const bigBtn = { borderRadius: 16, padding: "14px 0", border: "none", fontWeight: 700, fontSize: 15.5,
   display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" };
 const iconBtn = { background: "none", border: "none", padding: 4, cursor: "pointer", color: C.ink };
+const sheetInput = { width: "100%", border: "none", outline: "none", background: C.canvas, borderRadius: 14, padding: "12px 14px", fontSize: 15, marginTop: 8 };
 
 // ── Legal pages ───────────────────────────────────────────
 // Placeholder copy — NOT reviewed by a lawyer. Swap in real counsel-drafted
@@ -593,11 +562,11 @@ function LegalPage({ title, updated, sections }) {
 function TermsPage() {
   return (
     <LegalPage title="Terms of Service" updated="July 2026" sections={[
-      { heading: "1. What even is", body: "even lets you hold a balance, send and request money from other even users, add funds from a card, and cash out to a linked bank account. Peer-to-peer transfers move within even's own ledger; adding funds and cashing out are processed by Stripe." },
-      { heading: "2. Your account", body: "You must be at least 18 years old and provide accurate information when registering. You're responsible for keeping your password secure and for all activity on your account." },
-      { heading: "3. Sending and receiving money", body: "Transfers between even users are final once completed. Make sure you're paying the right person — even cannot reverse a completed peer-to-peer transfer. Requests for money are not binding; the other person can decline." },
+      { heading: "1. What even is", body: "even lets you verify your identity, link a bank account, and send or request money directly from other even users' bank accounts. Transfers move bank-to-bank through even's payment partner, Dwolla — even never holds your funds." },
+      { heading: "2. Your account", body: "You must be at least 18 years old and provide accurate information when registering, including for identity verification. You're responsible for keeping your password secure and for all activity on your account." },
+      { heading: "3. Sending and receiving money", body: "Transfers between even users are final once completed and move directly between linked bank accounts. Make sure you're paying the right person — even cannot reverse a completed transfer. Requests for money are not binding; the other person can decline." },
       { heading: "4. Fees", body: "even may charge a fee on payments, shown to you before you confirm a transfer. Fees, if any, are disclosed at the time of the transaction." },
-      { heading: "5. Prohibited use", body: "You agree not to use even for illegal activity, fraud, money laundering, or to circumvent Stripe's or even's terms. We may suspend or close accounts that violate this." },
+      { heading: "5. Prohibited use", body: "You agree not to use even for illegal activity, fraud, money laundering, or to circumvent Dwolla's or even's terms. We may suspend or close accounts that violate this." },
       { heading: "6. Limitation of liability", body: "even is provided \"as is.\" To the extent permitted by law, even is not liable for indirect or consequential damages arising from your use of the service." },
       { heading: "7. Changes", body: "We may update these terms from time to time. Continued use of even after changes take effect means you accept the updated terms." },
       { heading: "8. Contact", body: "Questions about these terms? Reach out via the contact details on our website." },
@@ -608,10 +577,10 @@ function TermsPage() {
 function PrivacyPage() {
   return (
     <LegalPage title="Privacy Policy" updated="July 2026" sections={[
-      { heading: "1. What we collect", body: "Account info you give us (name, handle, email, password — stored as a salted hash, never in plain text). Transaction data (who you paid, amounts, notes). Technical data (IP address, device/browser info) for security and fraud prevention." },
-      { heading: "2. How we use it", body: "To operate your account and process transfers, to communicate with you about your account, to detect and prevent fraud, and to comply with legal obligations." },
-      { heading: "3. Sharing", body: "We share what's necessary with Stripe to process card top-ups, bank payouts, and Connect account onboarding. We don't sell your personal data to third parties." },
-      { heading: "4. Your choices", body: "You can request a copy of your data or ask us to delete your account. Deleting your account removes your personal profile info; transaction records involving other users are retained as needed for their ledger accuracy and legal recordkeeping." },
+      { heading: "1. What we collect", body: "Account info you give us (name, handle, email, password — stored as a salted hash, never in plain text). Identity information needed for verification (address, date of birth, and SSN), which is sent directly to our payment partner Dwolla and not stored in our database. Transaction data (who you paid, amounts, notes). Technical data (IP address, device/browser info) for security and fraud prevention." },
+      { heading: "2. How we use it", body: "To operate your account and process transfers, to verify your identity as required by law, to communicate with you about your account, to detect and prevent fraud, and to comply with legal obligations." },
+      { heading: "3. Sharing", body: "We share what's necessary with Dwolla to verify your identity, link your bank account, and process transfers. We don't sell your personal data to third parties." },
+      { heading: "4. Your choices", body: "You can request a copy of your data or ask us to delete your account. Deleting your account removes your personal profile info; transaction records involving other users are retained as needed for their accuracy and legal recordkeeping." },
       { heading: "5. Security", body: "Passwords are hashed with bcrypt. We use industry-standard practices to protect your data, but no system is 100% secure — please use a strong, unique password." },
       { heading: "6. Changes", body: "We may update this policy from time to time; continued use of even after changes take effect means you accept the updated policy." },
       { heading: "7. Contact", body: "Questions about your data? Reach out via the contact details on our website." },
@@ -624,8 +593,5 @@ export default function App() {
   if (path === "/terms") return <TermsPage />;
   if (path === "/privacy") return <PrivacyPage />;
   const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
-  const screen = path.startsWith("/pay/")
-    ? <PayPage slug={decodeURIComponent(path.slice(5))} />
-    : <Wallet initialAuthMode={isSignup ? "register" : "login"} />;
-  return <>{screen}<IosInstallBanner /></>;
+  return <>{<Wallet initialAuthMode={isSignup ? "register" : "login"} />}<IosInstallBanner /></>;
 }

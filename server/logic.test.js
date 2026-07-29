@@ -1,8 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   toCents, dollars, validateAmount, cleanHandle,
-  canCover, txnDirection, shapeTxn, idempotencyDecision, computeFee,
-  resolveLinkAmount, linkUrl,
+  txnDirection, shapeTxn, idempotencyDecision, computeFee,
 } from "./logic.js";
 
 describe("toCents", () => {
@@ -50,29 +49,10 @@ describe("cleanHandle", () => {
   });
 });
 
-describe("canCover (overdraw guard)", () => {
-  it("allows spending up to the balance and blocks past it", () => {
-    expect(canCover(1000, 500)).toBe(true);
-    expect(canCover(500, 500)).toBe(true);
-    expect(canCover(500, 1000)).toBe(false);
-  });
-
-  it("a sequence of transfers never drives the balance negative", () => {
-    let bal = 1000;
-    const spend = (c) => { if (canCover(bal, c)) bal -= c; };
-    spend(600); // 400
-    spend(600); // blocked, stays 400
-    spend(400); // 0
-    spend(1);   // blocked
-    expect(bal).toBe(0);
-    expect(bal >= 0).toBe(true);
-  });
-});
-
 describe("txnDirection / shapeTxn", () => {
   const me = "u_me";
   const row = (over) => ({
-    id: "t1", kind: "pay", status: "complete", amountCents: 2500,
+    id: "t1", kind: "pay", status: "POSTED", amountCents: 2500,
     note: "🌮", createdAt: 0,
     fromUserId: "u_them", toUserId: me,
     fromUser: { name: "Sam", handle: "@sam" }, toUser: { name: "Me", handle: "@me" },
@@ -89,10 +69,6 @@ describe("txnDirection / shapeTxn", () => {
     const s = shapeTxn(row({ fromUserId: me, toUserId: "u_them" }), me);
     expect(s.dir).toBe("out");
     expect(s.who).toBe("Me"); // "other" party is the toUser here
-  });
-  it("classifies topups and payouts regardless of parties", () => {
-    expect(txnDirection({ kind: "topup" }, me)).toBe("in");
-    expect(txnDirection({ kind: "payout" }, me)).toBe("out");
   });
   it("shows the requester and payer sides correctly", () => {
     expect(txnDirection({ kind: "request", fromUserId: "payer", toUserId: me }, me)).toBe("requested");
@@ -134,24 +110,5 @@ describe("computeFee", () => {
     expect(computeFee(0, { bps: 150 })).toBe(0);
     expect(computeFee(-500, { bps: 150 })).toBe(0);
     expect(computeFee(NaN, { bps: 150 })).toBe(0);
-  });
-});
-
-describe("resolveLinkAmount", () => {
-  it("uses the fixed amount and ignores the payer's input", () => {
-    expect(resolveLinkAmount({ amountCents: 2500 }, 99)).toEqual({ ok: true, cents: 2500 });
-  });
-  it("requires a valid amount on an open link", () => {
-    expect(resolveLinkAmount({ amountCents: null }, "40").cents).toBe(4000);
-    expect(resolveLinkAmount({ amountCents: null }, "0").ok).toBe(false);
-    expect(resolveLinkAmount({ amountCents: null }, "abc").ok).toBe(false);
-    expect(resolveLinkAmount({ amountCents: null }, 20000).ok).toBe(false); // over $10k
-  });
-});
-
-describe("linkUrl", () => {
-  it("builds a /pay/<slug> url and normalizes a trailing slash", () => {
-    expect(linkUrl("https://even.replit.app", "aB3")).toBe("https://even.replit.app/pay/aB3");
-    expect(linkUrl("https://even.replit.app/", "aB3")).toBe("https://even.replit.app/pay/aB3");
   });
 });

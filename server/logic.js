@@ -25,14 +25,8 @@ export const cleanHandle = (handle) => {
   return h.startsWith("@") ? h : "@" + h;
 };
 
-// The overdraw guard, as a pure predicate. (The ledger also enforces this
-// atomically in SQL; this mirrors the same rule for tests and early checks.)
-export const canCover = (balanceCents, cents) => balanceCents >= cents;
-
 // Direction of a feed row from the viewer's perspective.
 export const txnDirection = (t, me) => {
-  if (t.kind === "topup") return "in";
-  if (t.kind === "payout") return "out";
   if (t.kind === "request") return t.toUserId === me ? "requested" : "request_due";
   return t.toUserId === me ? "in" : "out";
 };
@@ -67,15 +61,3 @@ export const computeFee = (cents, { bps = 0, flatCents = 0, capCents = Infinity 
   return fee;
 };
 
-// A payment link with a fixed amount ignores any amount the payer submits.
-// An open link (amountCents = null) requires the payer to pass a valid amount.
-export const resolveLinkAmount = (link, submittedAmount) => {
-  if (link.amountCents != null) return { ok: true, cents: link.amountCents };
-  const cents = toCents(submittedAmount);
-  if (!Number.isFinite(cents) || cents <= 0) return { ok: false, error: "Enter an amount above $0." };
-  if (cents > 1000000) return { ok: false, error: "The maximum is $10,000." };
-  return { ok: true, cents };
-};
-
-// Public URL for a link, given the app's origin.
-export const linkUrl = (origin, slug) => `${String(origin).replace(/\/$/, "")}/pay/${slug}`;
