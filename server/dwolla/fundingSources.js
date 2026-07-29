@@ -1,27 +1,12 @@
 // dwolla/fundingSources.js
-// Two ways to attach a user's bank account:
+// The manual fallback for attaching a bank: the user types their routing and
+// account number, then confirms two micro-deposits Dwolla sends 1-2 business
+// days later (instant in sandbox). Slow, but it works for banks Open Banking
+// can't reach.
 //
-//   addBankViaPlaid  — the fast path. The user logs into their bank through
-//     Plaid Link and the funding source comes back ALREADY VERIFIED, because
-//     Dwolla uses the processor token to read the account/routing numbers
-//     directly (then discards it). Takes about a minute, no waiting.
-//
-//   addBankManual    — the fallback, for banks Plaid can't reach or when Plaid
-//     isn't configured. The user types routing + account number, then confirms
-//     two micro-deposits Dwolla sends 1-2 business days later (instant in sandbox).
+// The fast path lives in openBanking.js — Instant Account Verification, where
+// the user logs into their bank and the funding source is verified on creation.
 import { dwolla } from "./client.js";
-
-/**
- * Create an immediately-verified funding source from a Plaid processor token.
- * @param customerUrl  the Verified Customer's resource URL
- * @param plaidToken   Plaid processor token scoped to Dwolla
- * @param name         display name, e.g. "Primary Checking"
- * @returns {string} funding source URL — no micro-deposit step required
- */
-export async function addBankViaPlaid(customerUrl, plaidToken, name = "Bank") {
-  const res = await dwolla.post(`${customerUrl}/funding-sources`, { plaidToken, name });
-  return res.headers.get("location");
-}
 
 /**
  * @param customerUrl  the Verified Customer's resource URL

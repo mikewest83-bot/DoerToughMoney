@@ -63,7 +63,11 @@ export const expediteOffered = () => {
 // that's granted and express quietly delivers via Same Day ACH instead.
 export const rtpEnabled = () => process.env.DWOLLA_RTP_ENABLED === "true";
 
-// Instant bank linking via Plaid. Without it, users fall back to typing routing
-// and account numbers and waiting 1-2 business days for micro-deposits — which
-// is a brutal amount of friction before anyone can send their first dollar.
-export const plaidConfigured = () => !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);
+// Instant Account Verification runs through Dwolla's Open Banking Services and
+// needs no credentials beyond Dwolla's — but it DOES require Open Banking
+// scopes on your Dwolla application, which are granted per account. Without
+// them, creating an exchange session returns 401 InvalidScope. Opt-in on
+// purpose: enable it only once Dwolla has granted the scopes, so the UI never
+// leads with a bank-login button that can't work.
+export const instantLinkEnabled = () =>
+  dwollaConfigured() && process.env.DWOLLA_OPEN_BANKING_ENABLED === "true";

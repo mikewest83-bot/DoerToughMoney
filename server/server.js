@@ -17,14 +17,13 @@ import {
   addBankManual, initiateMicroDeposits, verifyMicroDeposits,
   startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
   fileDispute, makeCreditFlows, getFundingSourceChannels, supportsInstant,
-  addBankViaPlaid,
+  createExchangeSession, getSessionToken, createExchange, addBankViaExchange,
 } from "./dwolla/index.js";
-import { createLinkToken, exchangeForProcessorToken } from "./plaid/link.js";
 import { idempotency } from "./idempotency.js";
 import { validateAmount, shapeTxn, computeFee } from "./logic.js";
 import {
   validateProductionConfig, feeParams, dwollaConfigured,
-  expediteFeeParams, expediteOffered, rtpEnabled, plaidConfigured,
+  expediteFeeParams, expediteOffered, rtpEnabled, instantLinkEnabled,
 } from "./config.js";
 
 // Instant delivery needs both the recipient's bank and our own Dwolla account
@@ -47,6 +46,11 @@ app.post(
     },
     onDocumentNeeded: async (dwollaCustomerId) => {
       await setKycStatusByCustomerUrlSuffix(dwollaCustomerId, "DOCUMENT");
+    },
+    onReauthRequired: async (exchangeId) => {
+      // The user's bank connection needs re-authentication; their payments will
+      // fail until they relink. No user-facing prompt yet — see README.
+      console.error(`[open-banking] REAUTH REQUIRED for exchange ${exchangeId} — user must reconnect their bank.`);
     },
   })
 );
@@ -72,9 +76,9 @@ app.get("/api/config", (_req, res) => {
     expediteOffered: expediteOffered(),
     expediteFeeBps: ex.bps, expediteFeeFlatCents: ex.flatCents,
     expediteFeeCapCents: Number.isFinite(ex.capCents) ? ex.capCents : null,
-    // Lets the client show instant bank linking instead of leading with the
-    // slow manual form.
-    plaidEnabled: plaidConfigured(),
+    // Lets the client lead with instant bank linking instead of the slow
+    // manual routing/account form.
+    instantLinkEnabled: instantLinkEnabled(),
   });
 });
 
@@ -107,27 +111,43 @@ app.get("/api/users", authRequired, async (req, res) => {
 // ── complete identity verification (pre-migration accounts) ──
 app.post("/api/verify-identity", authRequired, moneyLimiter, verifyIdentity);
 
-// ── link a bank instantly via Plaid ──────────────────────
-// Two calls: mint a Link token for the browser, then exchange what Link returns.
-// The resulting funding source is verified on creation, so there's no
-// micro-deposit wait and the user can send money right away.
-app.post("/api/bank/plaid/link-token", authRequired, moneyLimiter, async (req, res) => {
-  if (!plaidConfigured()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
+// ── link a bank instantly (Dwolla Open Banking / Plaid IAV) ──
+// Two calls: start a session to get a Link token for the browser, then hand
+// back what Link returns. The funding source is verified on creation, so
+// there's no micro-deposit wait and the user can send money right away.
+app.post("/api/bank/link/start", authRequired, moneyLimiter, async (req, res) => {
+  if (!instantLinkEnabled()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
   if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
-  res.json({ linkToken: await createLinkToken(req.user) });
+
+  // Sessions are single-use, so every attempt starts a fresh one.
+  try {
+    const sessionUrl = await createExchangeSession(req.user.dwollaCustomerUrl);
+    res.json({ linkToken: await getSessionToken(sessionUrl) });
+  } catch (e) {
+    // Open Banking scopes not granted on this Dwolla account yet — tell the
+    // client plainly so it can fall back to manual entry instead of 500ing.
+    if (e?.body?.code === "InvalidScope" || e?.status === 401) {
+      console.error("[open-banking] exchange session rejected — Open Banking scopes are not enabled on this Dwolla account.");
+      return res.status(503).json({ error: "Instant bank linking isn't available yet. Please enter your account details instead." });
+    }
+    throw e;
+  }
 });
 
-app.post("/api/bank/plaid/exchange", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  if (!plaidConfigured()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
-  const { publicToken, accountId, name } = req.body || {};
-  if (!publicToken || !accountId) return res.status(400).json({ error: "Bank connection was incomplete. Please try again." });
+app.post("/api/bank/link/complete", authRequired, moneyLimiter, idempotency, async (req, res) => {
+  if (!instantLinkEnabled()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
+  const { publicToken, bankAccountType, name } = req.body || {};
+  if (!publicToken) return res.status(400).json({ error: "Bank connection was incomplete. Please try again." });
   if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
 
-  const processorToken = await exchangeForProcessorToken(publicToken, accountId);
-  const fundingSourceUrl = await addBankViaPlaid(req.user.dwollaCustomerUrl, processorToken, String(name || "Bank").slice(0, 50));
+  const exchangeUrl = await createExchange(req.user.dwollaCustomerUrl, publicToken);
+  const fundingSourceUrl = await addBankViaExchange(req.user.dwollaCustomerUrl, exchangeUrl, {
+    bankAccountType: bankAccountType === "savings" ? "savings" : "checking",
+    name: String(name || "Bank").slice(0, 50),
+  });
 
-  // Already verified — record it as such, along with the processing channels
-  // that decide whether express payments here can ride Instant Payments.
+  // Verified on creation — record it as such, along with the processing
+  // channels that decide whether express payments here can ride Instant Payments.
   const channels = await getFundingSourceChannels(fundingSourceUrl).catch(() => ["ach"]);
   await setFundingSource(req.user.id, fundingSourceUrl);
   await setFundingSourceVerified(req.user.id, channels);

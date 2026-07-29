@@ -7,7 +7,13 @@ export {
   uploadDocument,
 } from "./customers.js";
 export {
-  addBankViaPlaid,
+  getPlaidPartnerHref,
+  createExchangeSession,
+  getSessionToken,
+  createExchange,
+  addBankViaExchange,
+} from "./openBanking.js";
+export {
   addBankManual,
   initiateMicroDeposits,
   verifyMicroDeposits,

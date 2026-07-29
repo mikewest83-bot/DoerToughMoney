@@ -82,6 +82,13 @@ export function dwollaWebhook(prisma, hooks = {}) {
       )
         await hooks.onFundingSourceReady(resourceId);
 
+      // An Open Banking connection has gone stale (bank password changed, MFA
+      // expired, consent lapsed). Payments on that funding source will fail
+      // until the user re-authenticates, so this needs surfacing rather than
+      // swallowing.
+      if (topic === "customer_exchange_reauth_required" && hooks.onReauthRequired)
+        await hooks.onReauthRequired(resourceId);
+
       // Always 200 once handled so Dwolla stops retrying.
       return res.status(200).send("ok");
     } catch (err) {

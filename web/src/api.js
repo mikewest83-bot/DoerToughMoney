@@ -43,8 +43,8 @@ export const api = {
   verifyIdentity: (b) => req("/api/verify-identity", { method: "POST", body: b }),
   fileDispute: (b) => req("/api/disputes", { method: "POST", body: b, idempotent: true }),
   disputes: () => req("/api/disputes"),
-  plaidLinkToken: () => req("/api/bank/plaid/link-token", { method: "POST" }),
-  plaidExchange: (b) => req("/api/bank/plaid/exchange", { method: "POST", body: b, idempotent: true }),
+  bankLinkStart: () => req("/api/bank/link/start", { method: "POST" }),
+  bankLinkComplete: (b) => req("/api/bank/link/complete", { method: "POST", body: b, idempotent: true }),
   bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),
   bankVerify: (b) => req("/api/bank/verify", { method: "POST", body: b }),
 };

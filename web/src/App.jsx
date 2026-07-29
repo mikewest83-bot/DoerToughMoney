@@ -84,19 +84,23 @@ function IosInstallBanner() {
   );
 }
 
-// Opens Plaid Link as soon as it's ready. Mounted only after a link token has
-// been fetched, so the user's click flows straight into their bank's login
-// instead of stalling on a spinner. Success hands back an already-verified
-// funding source — no micro-deposits, no waiting.
-function PlaidLauncher({ linkToken, onLinked, onError, onExit }) {
+// Opens the bank login as soon as it's ready. Mounted only after a link token
+// has been fetched, so the user's click flows straight into their bank instead
+// of stalling on a spinner. The token comes from Dwolla's Open Banking session,
+// and success yields a funding source that's already verified — no
+// micro-deposits, no waiting.
+function BankLoginLauncher({ linkToken, onLinked, onError, onExit }) {
   const { open, ready } = usePlaidLink({
     token: linkToken,
     onSuccess: async (publicToken, metadata) => {
       const account = metadata.accounts?.[0];
-      if (!account?.id) return onError("No account was selected. Please try again.");
       try {
-        const label = [metadata.institution?.name, account.subtype].filter(Boolean).join(" ") || account.name || "Bank";
-        const { user } = await api.plaidExchange({ publicToken, accountId: account.id, name: label });
+        const label = [metadata.institution?.name, account?.subtype].filter(Boolean).join(" ") || account?.name || "Bank";
+        const { user } = await api.bankLinkComplete({
+          publicToken,
+          bankAccountType: account?.subtype === "savings" ? "savings" : "checking",
+          name: label,
+        });
         onLinked(user);
       } catch (e) { onError(e.message); }
     },
@@ -210,7 +214,7 @@ function Wallet({ initialAuthMode = "login" }) {
   const [feeCfg, setFeeCfg] = useState({
     feeBps: 0, feeFlatCents: 0, feeCapCents: null,
     expediteOffered: false, expediteFeeBps: 0, expediteFeeFlatCents: 0, expediteFeeCapCents: null,
-    plaidEnabled: false,
+    instantLinkEnabled: false,
   });
   const [speed, setSpeed] = useState("STANDARD");
 
@@ -334,17 +338,17 @@ function Wallet({ initialAuthMode = "login" }) {
 
   // "choose" offers instant vs manual; "manual" is the routing/account form.
   const [bankMode, setBankMode] = useState("choose");
-  const [plaidToken, setPlaidToken] = useState(null);
+  const [bankLinkToken, setBankLinkToken] = useState(null);
 
   const openBankLink = () => {
     setBankForm({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" });
-    setBankErr(""); setPlaidToken(null);
-    setBankMode(feeCfg.plaidEnabled ? "choose" : "manual");
+    setBankErr(""); setBankLinkToken(null);
+    setBankMode(feeCfg.instantLinkEnabled ? "choose" : "manual");
     setBankOpen(true);
   };
-  const startPlaid = async () => {
+  const startInstantLink = async () => {
     setBankBusy(true); setBankErr("");
-    try { setPlaidToken((await api.plaidLinkToken()).linkToken); }
+    try { setBankLinkToken((await api.bankLinkStart()).linkToken); }
     catch (e) { setBankErr(e.message); } finally { setBankBusy(false); }
   };
   const submitBankLink = async () => {
@@ -562,12 +566,12 @@ function Wallet({ initialAuthMode = "login" }) {
                 <button onClick={() => setBankOpen(false)} style={iconBtn}><X size={22} /></button>
               </div>
 
-              {plaidToken && (
-                <PlaidLauncher
-                  linkToken={plaidToken}
-                  onLinked={(u) => { setUser(u); setPlaidToken(null); setBankOpen(false); refresh(); }}
-                  onError={(m) => { setPlaidToken(null); setBankErr(m); }}
-                  onExit={(m) => { setPlaidToken(null); if (m) setBankErr(m); }}
+              {bankLinkToken && (
+                <BankLoginLauncher
+                  linkToken={bankLinkToken}
+                  onLinked={(u) => { setUser(u); setBankLinkToken(null); setBankOpen(false); refresh(); }}
+                  onError={(m) => { setBankLinkToken(null); setBankErr(m); }}
+                  onExit={(m) => { setBankLinkToken(null); if (m) setBankErr(m); }}
                 />
               )}
 
@@ -577,7 +581,7 @@ function Wallet({ initialAuthMode = "login" }) {
                     Sign in to your bank and you're ready to send money in about a minute.
                   </p>
                   {bankErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{bankErr}</p>}
-                  <button onClick={startPlaid} disabled={bankBusy}
+                  <button onClick={startInstantLink} disabled={bankBusy}
                     style={{ width: "100%", marginTop: 12, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
                     <Building2 size={17} /> {bankBusy ? "Opening…" : "Connect your bank"}
                   </button>
@@ -607,7 +611,7 @@ function Wallet({ initialAuthMode = "login" }) {
                     style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1 }}>
                     {bankBusy ? "…" : "Link bank"}
                   </button>
-                  {feeCfg.plaidEnabled && (
+                  {feeCfg.instantLinkEnabled && (
                     <button onClick={() => { setBankErr(""); setBankMode("choose"); }}
                       style={{ width: "100%", marginTop: 10, padding: 10, background: "none", border: "none", color: C.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>
                       Sign in to your bank instead (faster)
