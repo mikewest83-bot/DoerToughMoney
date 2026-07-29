@@ -62,3 +62,8 @@ export const expediteOffered = () => {
 // "Real Time Payments not enabled for this account", so this stays off until
 // that's granted and express quietly delivers via Same Day ACH instead.
 export const rtpEnabled = () => process.env.DWOLLA_RTP_ENABLED === "true";
+
+// Instant bank linking via Plaid. Without it, users fall back to typing routing
+// and account numbers and waiting 1-2 business days for micro-deposits — which
+// is a brutal amount of friction before anyone can send their first dollar.
+export const plaidConfigured = () => !!(process.env.PLAID_CLIENT_ID && process.env.PLAID_SECRET);

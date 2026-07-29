@@ -17,12 +17,14 @@ import {
   addBankManual, initiateMicroDeposits, verifyMicroDeposits,
   startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
   fileDispute, makeCreditFlows, getFundingSourceChannels, supportsInstant,
+  addBankViaPlaid,
 } from "./dwolla/index.js";
+import { createLinkToken, exchangeForProcessorToken } from "./plaid/link.js";
 import { idempotency } from "./idempotency.js";
 import { validateAmount, shapeTxn, computeFee } from "./logic.js";
 import {
   validateProductionConfig, feeParams, dwollaConfigured,
-  expediteFeeParams, expediteOffered, rtpEnabled,
+  expediteFeeParams, expediteOffered, rtpEnabled, plaidConfigured,
 } from "./config.js";
 
 // Instant delivery needs both the recipient's bank and our own Dwolla account
@@ -70,6 +72,9 @@ app.get("/api/config", (_req, res) => {
     expediteOffered: expediteOffered(),
     expediteFeeBps: ex.bps, expediteFeeFlatCents: ex.flatCents,
     expediteFeeCapCents: Number.isFinite(ex.capCents) ? ex.capCents : null,
+    // Lets the client show instant bank linking instead of leading with the
+    // slow manual form.
+    plaidEnabled: plaidConfigured(),
   });
 });
 
@@ -101,6 +106,33 @@ app.get("/api/users", authRequired, async (req, res) => {
 
 // ── complete identity verification (pre-migration accounts) ──
 app.post("/api/verify-identity", authRequired, moneyLimiter, verifyIdentity);
+
+// ── link a bank instantly via Plaid ──────────────────────
+// Two calls: mint a Link token for the browser, then exchange what Link returns.
+// The resulting funding source is verified on creation, so there's no
+// micro-deposit wait and the user can send money right away.
+app.post("/api/bank/plaid/link-token", authRequired, moneyLimiter, async (req, res) => {
+  if (!plaidConfigured()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
+  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
+  res.json({ linkToken: await createLinkToken(req.user) });
+});
+
+app.post("/api/bank/plaid/exchange", authRequired, moneyLimiter, idempotency, async (req, res) => {
+  if (!plaidConfigured()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
+  const { publicToken, accountId, name } = req.body || {};
+  if (!publicToken || !accountId) return res.status(400).json({ error: "Bank connection was incomplete. Please try again." });
+  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
+
+  const processorToken = await exchangeForProcessorToken(publicToken, accountId);
+  const fundingSourceUrl = await addBankViaPlaid(req.user.dwollaCustomerUrl, processorToken, String(name || "Bank").slice(0, 50));
+
+  // Already verified — record it as such, along with the processing channels
+  // that decide whether express payments here can ride Instant Payments.
+  const channels = await getFundingSourceChannels(fundingSourceUrl).catch(() => ["ach"]);
+  await setFundingSource(req.user.id, fundingSourceUrl);
+  await setFundingSourceVerified(req.user.id, channels);
+  res.json({ user: publicUser(await getUserById(req.user.id)) });
+});
 
 // ── link a bank (manual routing/account + micro-deposits) ──
 app.post("/api/bank/link", authRequired, moneyLimiter, async (req, res) => {

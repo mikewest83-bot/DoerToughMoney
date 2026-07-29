@@ -3,6 +3,7 @@ import {
   Search, ArrowLeft, Delete, Check, ArrowUpRight,
   ArrowDownLeft, Clock, X, LogOut, Building2, ShieldCheck, Share2, AlertCircle,
 } from "lucide-react";
+import { usePlaidLink } from "react-plaid-link";
 import { api, setToken, hasToken } from "./api.js";
 
 const C = {
@@ -81,6 +82,29 @@ function IosInstallBanner() {
       </button>
     </div>
   );
+}
+
+// Opens Plaid Link as soon as it's ready. Mounted only after a link token has
+// been fetched, so the user's click flows straight into their bank's login
+// instead of stalling on a spinner. Success hands back an already-verified
+// funding source — no micro-deposits, no waiting.
+function PlaidLauncher({ linkToken, onLinked, onError, onExit }) {
+  const { open, ready } = usePlaidLink({
+    token: linkToken,
+    onSuccess: async (publicToken, metadata) => {
+      const account = metadata.accounts?.[0];
+      if (!account?.id) return onError("No account was selected. Please try again.");
+      try {
+        const label = [metadata.institution?.name, account.subtype].filter(Boolean).join(" ") || account.name || "Bank";
+        const { user } = await api.plaidExchange({ publicToken, accountId: account.id, name: label });
+        onLinked(user);
+      } catch (e) { onError(e.message); }
+    },
+    onExit: (err) => onExit(err ? err.display_message || err.error_message : null),
+  });
+
+  useEffect(() => { if (ready) open(); }, [ready, open]);
+  return null;
 }
 
 function Avatar({ name, size = 44 }) {
@@ -186,6 +210,7 @@ function Wallet({ initialAuthMode = "login" }) {
   const [feeCfg, setFeeCfg] = useState({
     feeBps: 0, feeFlatCents: 0, feeCapCents: null,
     expediteOffered: false, expediteFeeBps: 0, expediteFeeFlatCents: 0, expediteFeeCapCents: null,
+    plaidEnabled: false,
   });
   const [speed, setSpeed] = useState("STANDARD");
 
@@ -307,7 +332,21 @@ function Wallet({ initialAuthMode = "login" }) {
   const [bankBusy, setBankBusy] = useState(false);
   const [bankErr, setBankErr] = useState("");
 
-  const openBankLink = () => { setBankForm({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" }); setBankErr(""); setBankOpen(true); };
+  // "choose" offers instant vs manual; "manual" is the routing/account form.
+  const [bankMode, setBankMode] = useState("choose");
+  const [plaidToken, setPlaidToken] = useState(null);
+
+  const openBankLink = () => {
+    setBankForm({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" });
+    setBankErr(""); setPlaidToken(null);
+    setBankMode(feeCfg.plaidEnabled ? "choose" : "manual");
+    setBankOpen(true);
+  };
+  const startPlaid = async () => {
+    setBankBusy(true); setBankErr("");
+    try { setPlaidToken((await api.plaidLinkToken()).linkToken); }
+    catch (e) { setBankErr(e.message); } finally { setBankBusy(false); }
+  };
   const submitBankLink = async () => {
     setBankBusy(true); setBankErr("");
     try { await api.bankLink(bankForm); await refresh(); setBankOpen(false); }
@@ -517,30 +556,65 @@ function Wallet({ initialAuthMode = "login" }) {
             <div className="sheet-enter" onClick={(e) => e.stopPropagation()}
               style={{ background: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "16px 20px 28px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                <span style={{ fontWeight: 700, fontSize: 15 }}>Link your bank</span>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>
+                  {bankMode === "choose" ? "Add your bank" : "Enter account details"}
+                </span>
                 <button onClick={() => setBankOpen(false)} style={iconBtn}><X size={22} /></button>
               </div>
-              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>
-                We'll send two small deposits to confirm it's yours (instant in sandbox).
-              </p>
-              <div style={{ marginTop: 10 }}>
-                <input value={bankForm.name} onChange={(e) => setBankForm((f) => ({ ...f, name: e.target.value }))} placeholder="Nickname (e.g. Checking)"
-                  style={sheetInput} />
-                <input value={bankForm.routingNumber} onChange={(e) => setBankForm((f) => ({ ...f, routingNumber: e.target.value }))} placeholder="Routing number" inputMode="numeric"
-                  style={sheetInput} />
-                <input value={bankForm.accountNumber} onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder="Account number" inputMode="numeric"
-                  style={sheetInput} />
-                <select value={bankForm.bankAccountType} onChange={(e) => setBankForm((f) => ({ ...f, bankAccountType: e.target.value }))}
-                  style={{ ...sheetInput, appearance: "auto" }}>
-                  <option value="checking">Checking</option>
-                  <option value="savings">Savings</option>
-                </select>
-                {bankErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{bankErr}</p>}
-                <button onClick={submitBankLink} disabled={bankBusy}
-                  style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1 }}>
-                  {bankBusy ? "…" : "Link bank"}
-                </button>
-              </div>
+
+              {plaidToken && (
+                <PlaidLauncher
+                  linkToken={plaidToken}
+                  onLinked={(u) => { setUser(u); setPlaidToken(null); setBankOpen(false); refresh(); }}
+                  onError={(m) => { setPlaidToken(null); setBankErr(m); }}
+                  onExit={(m) => { setPlaidToken(null); if (m) setBankErr(m); }}
+                />
+              )}
+
+              {bankMode === "choose" ? (
+                <div style={{ marginTop: 6 }}>
+                  <p style={{ fontSize: 12.5, color: C.muted, marginTop: 0 }}>
+                    Sign in to your bank and you're ready to send money in about a minute.
+                  </p>
+                  {bankErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{bankErr}</p>}
+                  <button onClick={startPlaid} disabled={bankBusy}
+                    style={{ width: "100%", marginTop: 12, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1, display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                    <Building2 size={17} /> {bankBusy ? "Opening…" : "Connect your bank"}
+                  </button>
+                  <button onClick={() => { setBankErr(""); setBankMode("manual"); }}
+                    style={{ width: "100%", marginTop: 10, padding: 10, background: "none", border: "none", color: C.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>
+                    Can't find your bank? Enter account numbers instead
+                  </button>
+                </div>
+              ) : (
+                <div style={{ marginTop: 6 }}>
+                  <p style={{ fontSize: 12.5, color: C.muted, marginTop: 0 }}>
+                    We'll send two small deposits to confirm it's yours — that takes 1–2 business days.
+                  </p>
+                  <input value={bankForm.name} onChange={(e) => setBankForm((f) => ({ ...f, name: e.target.value }))} placeholder="Nickname (e.g. Checking)"
+                    style={sheetInput} />
+                  <input value={bankForm.routingNumber} onChange={(e) => setBankForm((f) => ({ ...f, routingNumber: e.target.value }))} placeholder="Routing number" inputMode="numeric"
+                    style={sheetInput} />
+                  <input value={bankForm.accountNumber} onChange={(e) => setBankForm((f) => ({ ...f, accountNumber: e.target.value }))} placeholder="Account number" inputMode="numeric"
+                    style={sheetInput} />
+                  <select value={bankForm.bankAccountType} onChange={(e) => setBankForm((f) => ({ ...f, bankAccountType: e.target.value }))}
+                    style={{ ...sheetInput, appearance: "auto" }}>
+                    <option value="checking">Checking</option>
+                    <option value="savings">Savings</option>
+                  </select>
+                  {bankErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{bankErr}</p>}
+                  <button onClick={submitBankLink} disabled={bankBusy}
+                    style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: bankBusy ? 0.6 : 1 }}>
+                    {bankBusy ? "…" : "Link bank"}
+                  </button>
+                  {feeCfg.plaidEnabled && (
+                    <button onClick={() => { setBankErr(""); setBankMode("choose"); }}
+                      style={{ width: "100%", marginTop: 10, padding: 10, background: "none", border: "none", color: C.muted, fontSize: 13, cursor: "pointer", textDecoration: "underline" }}>
+                      Sign in to your bank instead (faster)
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}

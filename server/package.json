@@ -2,7 +2,7 @@
   "name": "even-server",
   "version": "1.0.0",
   "type": "module",
-  "description": "even \u2014 P2P payments backend (auth + Dwolla bank-to-bank transfers, idempotent + rate-limited + tested)",
+  "description": "even — P2P payments backend (auth + Dwolla bank-to-bank transfers, idempotent + rate-limited + tested)",
   "main": "server.js",
   "engines": {
     "node": "20.x"
@@ -29,6 +29,7 @@
     "express-rate-limit": "^7.4.0",
     "jsonwebtoken": "^9.0.2",
     "node-cron": "^3.0.3",
+    "plaid": "^45.0.0",
     "prisma": "^5.19.0"
   },
   "devDependencies": {

@@ -7,6 +7,7 @@ export {
   uploadDocument,
 } from "./customers.js";
 export {
+  addBankViaPlaid,
   addBankManual,
   initiateMicroDeposits,
   verifyMicroDeposits,
