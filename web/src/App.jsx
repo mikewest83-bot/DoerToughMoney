@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useCallback } from "react";
 import {
   Search, ArrowLeft, Delete, Check, Plus, ArrowUpRight,
   ArrowDownLeft, Clock, X, LogOut, Building2, Banknote,
-  Link2, Copy, QrCode,
+  Link2, Copy, QrCode, Share2,
 } from "lucide-react";
 import QRCode from "qrcode";
 import { api, setToken, hasToken } from "./api.js";
@@ -31,6 +31,45 @@ const fontStyle = (
     input{font-family:inherit}
   `}</style>
 );
+
+// ── iOS "Add to Home Screen" banner ──────────────────────
+// iOS Safari has no install prompt API, so PWAs have to tell users
+// to do it manually via the Share sheet.
+function useIosInstallPrompt() {
+  const [show, setShow] = useState(false);
+  useEffect(() => {
+    const ua = window.navigator.userAgent;
+    const isIos = /iphone|ipad|ipod/i.test(ua) || (ua.includes("Macintosh") && navigator.maxTouchPoints > 1);
+    const isSafari = /^((?!crios|fxios|edgios|opios).)*safari/i.test(ua);
+    const isStandalone = window.navigator.standalone === true || window.matchMedia("(display-mode: standalone)").matches;
+    const dismissed = localStorage.getItem("even_ios_install_dismissed") === "1";
+    setShow(isIos && isSafari && !isStandalone && !dismissed);
+  }, []);
+  const dismiss = () => { localStorage.setItem("even_ios_install_dismissed", "1"); setShow(false); };
+  return [show, dismiss];
+}
+
+function IosInstallBanner() {
+  const [show, dismiss] = useIosInstallPrompt();
+  if (!show) return null;
+  return (
+    <div style={{
+      position: "fixed", left: 12, right: 12, bottom: 12, zIndex: 50, maxWidth: 420, margin: "0 auto",
+      background: C.ink, color: "#fff", borderRadius: 16, padding: "14px 16px",
+      display: "flex", alignItems: "center", gap: 12, boxShadow: "0 8px 24px rgba(0,0,0,.25)",
+      fontFamily: "Inter, system-ui, sans-serif",
+    }}>
+      <Share2 size={20} style={{ flexShrink: 0, color: C.brand }} />
+      <p style={{ margin: 0, fontSize: 13, lineHeight: 1.4, flex: 1 }}>
+        Install even: tap <strong>Share</strong> below, then <strong>Add to Home Screen</strong>.
+      </p>
+      <button onClick={dismiss} aria-label="Dismiss"
+        style={{ background: "transparent", border: "none", color: "#B9B9C6", cursor: "pointer", flexShrink: 0, padding: 4 }}>
+        <X size={18} />
+      </button>
+    </div>
+  );
+}
 
 function Avatar({ name, size = 44 }) {
   return (
@@ -518,6 +557,8 @@ const iconBtn = { background: "none", border: "none", padding: 4, cursor: "point
 
 export default function App() {
   const path = window.location.pathname;
-  if (path.startsWith("/pay/")) return <PayPage slug={decodeURIComponent(path.slice(5))} />;
-  return <Wallet />;
+  const screen = path.startsWith("/pay/")
+    ? <PayPage slug={decodeURIComponent(path.slice(5))} />
+    : <Wallet />;
+  return <>{screen}<IosInstallBanner /></>;
 }
