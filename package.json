@@ -1,6 +1,9 @@
 {
   "name": "even-app",
   "private": true,
+  "engines": {
+    "node": "20.x"
+  },
   "scripts": {
     "build": "cd server && npm install && cd ../web && npm install && npm run build",
     "start": "cd server && npm run start"
