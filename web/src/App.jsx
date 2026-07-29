@@ -12,6 +12,9 @@ const C = {
   brand: "#5B4DF5", brandSoft: "#ECEAFE", green: "#12A150",
   greenSoft: "#E4F5EC", amber: "#E8A33D", muted: "#7A7A86", line: "#E6E6EC",
 };
+// Soft brand-tinted blobs over the base canvas color, used on full-page wrappers.
+const pageBg = `radial-gradient(900px circle at 12% -8%, ${C.brandSoft} 0%, transparent 55%), `
+  + `radial-gradient(700px circle at 108% 105%, ${C.brandSoft} 0%, transparent 50%), ${C.canvas}`;
 const AV = ["#5B4DF5", "#12A150", "#E8A33D", "#E5556E", "#2AA6C4", "#8B5CF6", "#EC6C3E"];
 const initials = (n = "") => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const colorFor = (n = "") => { let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) % AV.length; return AV[h]; };
@@ -107,7 +110,7 @@ function Auth({ onDone, initialMode = "login" }) {
   );
 
   return (
-    <div style={{ minHeight: "100vh", background: C.canvas, display: "flex", flexDirection: "column",
+    <div style={{ minHeight: "100vh", background: pageBg, display: "flex", flexDirection: "column",
       justifyContent: "center", padding: 24, fontFamily: "Inter, sans-serif", color: C.ink }}>
       {fontStyle}
       <div style={{ maxWidth: 400, width: "100%", margin: "0 auto" }}>
@@ -172,7 +175,7 @@ function PayPage({ slug }) {
     } catch (e) { setErr(e.message); setBusy(false); }
   };
 
-  const wrap = { minHeight: "100vh", background: C.canvas, display: "flex", flexDirection: "column",
+  const wrap = { minHeight: "100vh", background: pageBg, display: "flex", flexDirection: "column",
     justifyContent: "center", alignItems: "center", padding: 24, fontFamily: "Inter, sans-serif", color: C.ink };
 
   if (done) return (
@@ -335,13 +338,13 @@ function Wallet({ initialAuthMode = "login" }) {
 
   const signOut = () => { setToken(null); setUser(null); setFeed([]); };
 
-  if (!ready) return <div style={{ minHeight: "100vh", background: C.canvas }}>{fontStyle}</div>;
+  if (!ready) return <div style={{ minHeight: "100vh", background: pageBg }}>{fontStyle}</div>;
   if (!user) return <Auth onDone={(u) => { setUser(u); refresh(); }} initialMode={initialAuthMode} />;
 
   const balance = (user.balanceCents || 0) / 100;
 
   return (
-    <div style={{ minHeight: "100vh", background: C.canvas, display: "flex", justifyContent: "center",
+    <div style={{ minHeight: "100vh", background: pageBg, display: "flex", justifyContent: "center",
       fontFamily: "Inter, system-ui, sans-serif", color: C.ink }}>
       {fontStyle}
       <div style={{ width: "100%", maxWidth: 448, position: "relative", minHeight: "100vh" }}>
