@@ -1,6 +1,10 @@
 export function validateProductionConfig() {
   if (process.env.NODE_ENV !== "production") return;
-  const required = ["DATABASE_URL", "JWT_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "WEB_ORIGIN"];
+  const required = [
+    "DATABASE_URL", "JWT_SECRET", "STRIPE_SECRET_KEY", "WEB_ORIGIN",
+    "STRIPE_WEBHOOK_SECRET",        // platform-account events (checkout.session.completed)
+    "STRIPE_WEBHOOK_SECRET_CONNECT", // connected-account events (payout.*)
+  ];
   const missing = required.filter((name) => !process.env[name]);
   if (missing.length) throw new Error(`Missing required production environment variables: ${missing.join(", ")}`);
   if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production");

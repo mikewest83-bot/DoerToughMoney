@@ -121,13 +121,24 @@ export async function cashOut(user, cents, idem, transactionId) {
 
 export async function handleWebhook(req, res) {
   const sig = req.headers["stripe-signature"];
+  // Two Stripe webhook destinations point here, each with its own signing
+  // secret: one for platform-account events (checkout.session.completed),
+  // one for connected-account events (payout.*, since cash-outs happen on
+  // the user's own Express account). Try both secrets.
+  const secrets = [process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_WEBHOOK_SECRET_CONNECT].filter(Boolean);
+  if (!secrets.length) return res.status(400).send("Webhook signature failed: no webhook secret configured");
+
   let event;
-  try {
-    if (!process.env.STRIPE_WEBHOOK_SECRET) throw new Error("STRIPE_WEBHOOK_SECRET is required");
-    event = stripe().webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err) {
-    return res.status(400).send(`Webhook signature failed: ${err.message}`);
+  let lastErr;
+  for (const secret of secrets) {
+    try {
+      event = stripe().webhooks.constructEvent(req.body, sig, secret);
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
   }
+  if (!event) return res.status(400).send(`Webhook signature failed: ${lastErr.message}`);
 
   if (event.type === "checkout.session.completed") {
     const s = event.data.object;
