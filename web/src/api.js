@@ -40,6 +40,8 @@ export const api = {
   pay: (b) => req("/api/pay", { method: "POST", body: b, idempotent: true }),
   request: (b) => req("/api/request", { method: "POST", body: b, idempotent: true }),
   verifyIdentity: (b) => req("/api/verify-identity", { method: "POST", body: b }),
+  fileDispute: (b) => req("/api/disputes", { method: "POST", body: b, idempotent: true }),
+  disputes: () => req("/api/disputes"),
   bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),
   bankVerify: (b) => req("/api/bank/verify", { method: "POST", body: b }),
 };

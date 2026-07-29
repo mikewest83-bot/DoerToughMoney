@@ -15,6 +15,10 @@ export function validateProductionConfig() {
   }
 }
 
+// True when Dwolla credentials are present. Background jobs check this so the
+// app can run without them (they'd otherwise throw on every scheduled tick).
+export const dwollaConfigured = () => !!(process.env.DWOLLA_KEY && process.env.DWOLLA_SECRET);
+
 // Platform fee parameters, read from env. Off (all zero) unless configured.
 //   PLATFORM_FEE_BPS        basis points, e.g. 150 = 1.5%
 //   PLATFORM_FEE_FLAT_CENTS flat add-on per payment, in cents

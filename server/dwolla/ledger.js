@@ -51,11 +51,9 @@ export async function applyTransferStatus(prisma, dwollaTransferId, nextStatus) 
  * and assert our record matches. Returns a list of drifts to alert on.
  */
 export async function reconcile(prisma, getTransferFn) {
-  const open = await prisma.transfer.findUnique
-    ? await prisma.transfer.findMany({
-        where: { status: { in: ["PENDING", "POSTED"] } },
-      })
-    : [];
+  // Only PENDING can still change on Dwolla's side; POSTED transfers are only
+  // revisited if they're returned, which arrives as its own webhook event.
+  const open = await prisma.transfer.findMany({ where: { status: "PENDING" } });
 
   const drifts = [];
   for (const t of open) {

@@ -15,10 +15,12 @@ import prisma, {
 import {
   dwollaWebhook, checkVelocity, VelocityError, createTransfer,
   addBankManual, initiateMicroDeposits, verifyMicroDeposits,
+  startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
+  fileDispute, makeCreditFlows,
 } from "./dwolla/index.js";
 import { idempotency } from "./idempotency.js";
 import { validateAmount, shapeTxn, computeFee } from "./logic.js";
-import { validateProductionConfig, feeParams } from "./config.js";
+import { validateProductionConfig, feeParams, dwollaConfigured } from "./config.js";
 
 validateProductionConfig();
 
@@ -151,6 +153,49 @@ app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) =
   res.json({ user: publicUser(req.user), feeCents, amountCents: v.cents });
 });
 
+// ── disputes (Reg E) ─────────────────────────────────────
+// File a dispute on a transfer you were party to. The 10-business-day
+// investigation clock starts here; the daily sweep enforces the deadlines.
+app.post("/api/disputes", authRequired, moneyLimiter, idempotency, async (req, res) => {
+  const { transferId, reason } = req.body || {};
+  if (!transferId) return res.status(400).json({ error: "Which payment is this about?" });
+  const trimmedReason = String(reason || "").trim();
+  if (trimmedReason.length < 3) return res.status(400).json({ error: "Tell us briefly what went wrong." });
+
+  const transfer = await prisma.transfer.findUnique({ where: { id: transferId } });
+  if (!transfer) return res.status(404).json({ error: "Payment not found." });
+  if (transfer.senderId !== req.user.id && transfer.recipientId !== req.user.id)
+    return res.status(403).json({ error: "That isn't your payment." });
+
+  const already = await prisma.dispute.findFirst({
+    where: { transferId, userId: req.user.id, status: { notIn: ["RESOLVED_UPHELD", "RESOLVED_DENIED"] } },
+  });
+  if (already) return res.status(409).json({ error: "You already have an open dispute on this payment." });
+
+  const dispute = await fileDispute(prisma, {
+    transferId,
+    userId: req.user.id,
+    amountCents: transfer.amountCents,
+    reason: trimmedReason.slice(0, 500),
+  });
+  res.status(201).json({ dispute: shapeDispute(dispute) });
+});
+
+app.get("/api/disputes", authRequired, async (req, res) => {
+  const disputes = await prisma.dispute.findMany({
+    where: { userId: req.user.id },
+    orderBy: { filedAt: "desc" },
+    take: 50,
+  });
+  res.json({ disputes: disputes.map(shapeDispute) });
+});
+
+const shapeDispute = (d) => ({
+  id: d.id, transferId: d.transferId, status: d.status,
+  amount: d.amountCents / 100, reason: d.reason,
+  filedAt: d.filedAt, resolvedAt: d.resolvedAt, resolutionNote: d.resolutionNote,
+});
+
 // ── request money (no Dwolla — just a note on the feed) ────
 app.post("/api/request", authRequired, moneyLimiter, idempotency, async (req, res) => {
   const { handle, amount, note } = req.body || {};
@@ -181,7 +226,55 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: "Something went wrong on our end. Please try again." });
 });
 
+// ── background jobs ──────────────────────────────────────
+// Both crons assume a single instance (numReplicas: 1). If this service is
+// ever scaled out, move them to a dedicated worker or add a distributed lock,
+// or every replica will run the same sweep concurrently.
+function startBackgroundJobs() {
+  if (process.env.DISABLE_CRONS) return;
+  if (!dwollaConfigured()) {
+    console.warn("[jobs] Dwolla not configured — reconciliation and dispute sweeps are disabled.");
+    return;
+  }
+
+  // Hourly: catch transfers whose webhook was missed or misrouted.
+  startReconcileCron(prisma, {
+    onDrift: async (drifts) => {
+      // No alerting integration yet — this is the hook for Slack/PagerDuty.
+      console.error("[dwolla] LEDGER DRIFT", JSON.stringify(drifts));
+    },
+  });
+
+  // Daily: enforce Reg E deadlines. Auto-issuing provisional credit needs a
+  // platform balance to pay from; without it we can only alert, since issuing
+  // credit we can't fund would record a credit that never actually moved.
+  let flows = null;
+  if (process.env.PLATFORM_BALANCE_FS_URL) {
+    flows = makeCreditFlows({ prisma, platformBalanceFundingSourceUrl: process.env.PLATFORM_BALANCE_FS_URL });
+  } else {
+    console.warn("[reg-e] PLATFORM_BALANCE_FS_URL not set — provisional credit will be flagged for manual action, not auto-issued.");
+  }
+
+  startDisputeDeadlineCron(prisma, {
+    onProvisionalCreditDue: async (dispute) => {
+      if (!flows) {
+        console.error(`[reg-e] ACTION REQUIRED: dispute ${dispute.id} is past the 10-business-day mark and needs provisional credit (no platform balance configured to auto-issue).`);
+        return;
+      }
+      await issueProvisionalCredit(prisma, dispute.id, { creditUser: flows.creditUser });
+    },
+    onFinalOverdue: async (dispute) => {
+      console.error(`[reg-e] ESCALATE: dispute ${dispute.id} is past the 45-day final deadline.`);
+    },
+  });
+
+  console.log("[jobs] reconciliation + Reg E deadline sweeps scheduled");
+}
+
 const PORT = process.env.PORT || 4000;
-app.listen(PORT, () => console.log(`even server on :${PORT}`));
+app.listen(PORT, () => {
+  console.log(`even server on :${PORT}`);
+  startBackgroundJobs();
+});
 
 export default app;

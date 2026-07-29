@@ -22,6 +22,14 @@ enum TransferStatus {
   RETURNED
 }
 
+enum DisputeStatus {
+  FILED
+  INVESTIGATING
+  PROVISIONAL_CREDIT_ISSUED
+  RESOLVED_UPHELD
+  RESOLVED_DENIED
+}
+
 model User {
   id                    String    @id @default(cuid())
   name                  String
@@ -38,6 +46,7 @@ model User {
   receivedTransfers Transfer[] @relation("recipient")
   sentRequests      Request[]  @relation("payer")
   receivedRequests  Request[]  @relation("requester")
+  disputes          Dispute[]
 }
 
 // even's record of money movement. No in-app spendable balance — funds live
@@ -59,9 +68,37 @@ model Transfer {
   status         TransferStatus @default(PENDING)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
+  disputes       Dispute[]
 
   @@index([senderId])
   @@index([recipientId])
+}
+
+// Regulation E dispute record. Reg E imposes hard deadlines on consumer EFT
+// disputes: investigate within 10 business days, or issue provisional credit
+// and take up to 45 calendar days total. investigationDueAt/finalDueAt encode
+// those deadlines so the daily sweep in dwolla/disputes.js can enforce them.
+model Dispute {
+  id                  String        @id @default(cuid())
+  transferId          String
+  transfer            Transfer      @relation(fields: [transferId], references: [id])
+  userId              String
+  user                User          @relation(fields: [userId], references: [id])
+  amountCents         Int
+  reason              String
+  status              DisputeStatus @default(FILED)
+  filedAt             DateTime      @default(now())
+  investigationDueAt  DateTime      // filedAt + 10 business days
+  provisionalCreditAt DateTime?     // set when provisional credit is issued
+  finalDueAt          DateTime?     // filedAt + 45 calendar days
+  resolvedAt          DateTime?
+  resolutionNote      String?
+  createdAt           DateTime      @default(now())
+  updatedAt           DateTime      @updatedAt
+
+  @@index([transferId])
+  @@index([userId])
+  @@index([status])
 }
 
 // A non-money "please pay me" note. No Dwolla involvement — purely informational

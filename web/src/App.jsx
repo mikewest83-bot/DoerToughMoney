@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Search, ArrowLeft, Delete, Check, ArrowUpRight,
-  ArrowDownLeft, Clock, X, LogOut, Building2, ShieldCheck, Share2,
+  ArrowDownLeft, Clock, X, LogOut, Building2, ShieldCheck, Share2, AlertCircle,
 } from "lucide-react";
 import { api, setToken, hasToken } from "./api.js";
 
@@ -21,6 +21,12 @@ const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDig
 const KYC_LABEL = {
   PENDING: "Verification pending", VERIFIED: "Identity verified", RETRY: "Needs updated info",
   DOCUMENT: "ID document needed", SUSPENDED: "Account suspended",
+};
+
+const DISPUTE_LABEL = {
+  FILED: "Dispute filed", INVESTIGATING: "Under investigation",
+  PROVISIONAL_CREDIT_ISSUED: "Provisional credit issued",
+  RESOLVED_UPHELD: "Dispute resolved in your favor", RESOLVED_DENIED: "Dispute denied",
 };
 
 const fontStyle = (
@@ -191,9 +197,12 @@ function Wallet({ initialAuthMode = "login" }) {
   const [last, setLast] = useState(null);
   const [busy, setBusy] = useState(false);
 
+  const [disputes, setDisputes] = useState([]);
+
   const refresh = useCallback(async () => {
     const [{ user }, { feed }] = await Promise.all([api.me(), api.feed()]);
     setUser(user); setFeed(feed);
+    try { setDisputes((await api.disputes()).disputes); } catch {}
   }, []);
 
   useEffect(() => {
@@ -246,6 +255,24 @@ function Wallet({ initialAuthMode = "login" }) {
       await refresh();
       setStep("done");
     } catch (e) { setError(e.message); } finally { setBusy(false); }
+  };
+
+  // ── disputes ────────────────────────────────────────────
+  const disputeFor = (transferId) => disputes.find((d) => d.transferId === transferId);
+  const [txnSheet, setTxnSheet] = useState(null); // the feed row being viewed
+  const [disputeReason, setDisputeReason] = useState("");
+  const [disputeBusy, setDisputeBusy] = useState(false);
+  const [disputeErr, setDisputeErr] = useState("");
+  const [disputeFiling, setDisputeFiling] = useState(false);
+
+  const openTxn = (t) => { setTxnSheet(t); setDisputeReason(""); setDisputeErr(""); setDisputeFiling(false); };
+  const submitDispute = async () => {
+    setDisputeBusy(true); setDisputeErr("");
+    try {
+      await api.fileDispute({ transferId: txnSheet.id, reason: disputeReason });
+      setDisputes((await api.disputes()).disputes);
+      setTxnSheet(null);
+    } catch (e) { setDisputeErr(e.message); } finally { setDisputeBusy(false); }
   };
 
   // ── identity verification for pre-migration accounts ──
@@ -357,26 +384,88 @@ function Wallet({ initialAuthMode = "login" }) {
           <h2 style={{ fontSize: 13, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em", margin: 0 }}>Activity</h2>
           <div style={{ marginTop: 8 }}>
             {feed.length === 0 && <p style={{ color: C.muted, fontSize: 14, padding: "24px 0" }}>Nothing yet. Pay someone to get started.</p>}
-            {feed.map((t) => (
-              <div key={t.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}` }}>
-                <Avatar name={t.who} />
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {t.dir === "in" ? t.who
-                      : t.dir === "requested" ? `You requested ${t.who}` : t.dir === "request_due" ? `${t.who} requested you` : `You paid ${t.who}`}
-                  </p>
-                  <p style={{ margin: 0, fontSize: 13, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {t.note}{t.status === "PENDING" ? " · pending" : t.status === "FAILED" ? " · failed" : t.status === "RETURNED" ? " · returned" : ""}
-                  </p>
+            {feed.map((t) => {
+              const d = t.kind === "pay" ? disputeFor(t.id) : null;
+              const isPay = t.kind === "pay";
+              return (
+                <div key={t.id} onClick={isPay ? () => openTxn(t) : undefined}
+                  style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 0", borderBottom: `1px solid ${C.line}`, cursor: isPay ? "pointer" : "default" }}>
+                  <Avatar name={t.who} />
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {t.dir === "in" ? t.who
+                        : t.dir === "requested" ? `You requested ${t.who}` : t.dir === "request_due" ? `${t.who} requested you` : `You paid ${t.who}`}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: d ? C.amber : C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {d ? DISPUTE_LABEL[d.status] : <>{t.note}{t.status === "PENDING" ? " · pending" : t.status === "FAILED" ? " · failed" : t.status === "RETURNED" ? " · returned" : ""}</>}
+                    </p>
+                  </div>
+                  <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14.5,
+                    color: t.dir === "in" ? C.green : (t.dir === "requested" || t.dir === "request_due") ? C.amber : C.ink }}>
+                    {t.dir === "in" ? "+" : (t.dir === "requested" || t.dir === "request_due") ? "" : "−"}${money(t.amount)}
+                  </span>
                 </div>
-                <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 14.5,
-                  color: t.dir === "in" ? C.green : (t.dir === "requested" || t.dir === "request_due") ? C.amber : C.ink }}>
-                  {t.dir === "in" ? "+" : (t.dir === "requested" || t.dir === "request_due") ? "" : "−"}${money(t.amount)}
-                </span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
+
+        {txnSheet && (() => {
+          const d = disputeFor(txnSheet.id);
+          return (
+            <div onClick={() => setTxnSheet(null)}
+              style={{ position: "absolute", inset: 0, zIndex: 25, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: "rgba(20,19,26,.4)" }}>
+              <div className="sheet-enter" onClick={(e) => e.stopPropagation()}
+                style={{ background: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "16px 20px 28px" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                  <span style={{ fontWeight: 700, fontSize: 15 }}>Payment details</span>
+                  <button onClick={() => setTxnSheet(null)} style={iconBtn}><X size={22} /></button>
+                </div>
+
+                <div style={{ display: "flex", alignItems: "center", gap: 12, marginTop: 12 }}>
+                  <Avatar name={txnSheet.who} size={40} />
+                  <div style={{ flex: 1 }}>
+                    <p style={{ margin: 0, fontSize: 15, fontWeight: 600 }}>
+                      {txnSheet.dir === "in" ? `From ${txnSheet.who}` : `To ${txnSheet.who}`}
+                    </p>
+                    <p style={{ margin: 0, fontSize: 13, color: C.muted }}>{txnSheet.handle} · {txnSheet.status.toLowerCase()}</p>
+                  </div>
+                  <span style={{ fontFamily: "'Space Mono',monospace", fontWeight: 700, fontSize: 17 }}>${money(txnSheet.amount)}</span>
+                </div>
+                {txnSheet.note && <p style={{ fontSize: 14, color: C.muted, marginTop: 10 }}>{txnSheet.note}</p>}
+
+                {d ? (
+                  <div style={{ marginTop: 16, background: "#FFF6E5", border: "1px solid #F0DDB0", borderRadius: 12, padding: "12px 14px" }}>
+                    <p style={{ margin: 0, fontSize: 13.5, fontWeight: 600, color: "#8A6416" }}>{DISPUTE_LABEL[d.status]}</p>
+                    <p style={{ margin: "4px 0 0", fontSize: 12.5, color: "#8A6416" }}>
+                      Filed {new Date(d.filedAt).toLocaleDateString()}. {d.resolutionNote || "We'll follow up within 10 business days."}
+                    </p>
+                  </div>
+                ) : !disputeFiling ? (
+                  <button onClick={() => setDisputeFiling(true)}
+                    style={{ width: "100%", marginTop: 18, padding: 13, borderRadius: 14, border: `1px solid ${C.line}`, background: "transparent", color: C.ink, fontWeight: 600, fontSize: 14.5, display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" }}>
+                    <AlertCircle size={16} /> Report a problem
+                  </button>
+                ) : (
+                  <div style={{ marginTop: 16 }}>
+                    <label style={{ fontSize: 12.5, color: C.muted }}>What went wrong?</label>
+                    <textarea value={disputeReason} onChange={(e) => setDisputeReason(e.target.value)} rows={3}
+                      placeholder="e.g. I didn't authorize this payment"
+                      style={{ ...sheetInput, resize: "vertical", fontFamily: "inherit" }} />
+                    <p style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>
+                      We have 10 business days to investigate. You'll get a provisional credit if it takes longer.
+                    </p>
+                    {disputeErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{disputeErr}</p>}
+                    <button onClick={submitDispute} disabled={disputeBusy || disputeReason.trim().length < 3}
+                      style={{ width: "100%", marginTop: 12, padding: 14, borderRadius: 14, border: "none", background: C.ink, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: (disputeBusy || disputeReason.trim().length < 3) ? 0.5 : 1 }}>
+                      {disputeBusy ? "…" : "Submit dispute"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {idOpen && (
           <div onClick={() => setIdOpen(false)}
