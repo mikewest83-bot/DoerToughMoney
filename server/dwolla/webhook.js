@@ -26,17 +26,20 @@ export function verifySignature(rawBody, signatureHeader) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// Map a Dwolla event topic to an even transfer status.
-// NOTE: confirm exact topic strings against current Dwolla webhook docs; these
-// cover the core lifecycle. Returns null for events we don't act on here.
+// Map a Dwolla event topic to an even transfer status. Transfers between
+// Verified Customers fire customer-scoped topics (customer_transfer_completed,
+// customer_bank_transfer_completed for the bank legs), so match by suffix.
+// Bank-leg events carry their own resource ids that won't match our stored
+// transfer id — applyTransferStatus safely no-ops on unknown ids.
 function statusForTopic(topic) {
-  if (topic === "transfer_created") return "PENDING";
-  if (topic === "transfer_completed") return "POSTED";
-  if (topic === "transfer_failed") return "FAILED";
-  if (topic === "transfer_cancelled") return "FAILED";
+  if (!topic) return null;
   // ACH can bounce AFTER completion — a return must reverse the ledger.
   if (topic.includes("transfer_returned") || topic.includes("_return"))
     return "RETURNED";
+  if (topic.endsWith("transfer_created")) return "PENDING";
+  if (topic.endsWith("transfer_completed")) return "POSTED";
+  if (topic.endsWith("transfer_failed")) return "FAILED";
+  if (topic.endsWith("transfer_cancelled")) return "FAILED";
   return null;
 }
 
