@@ -1,9 +1,12 @@
 // One-off reconcile: pull each non-terminal transfer's real status from Dwolla
-// and apply it to our ledger (covers missed/misrouted webhooks). Run with the
-// app's env vars:
-//   railway run --service even-app -- node scripts/reconcile-transfers.js
-// PUBLIC_DATABASE_URL overrides DATABASE_URL when running outside Railway's
-// private network (the injected DATABASE_URL points at the internal host).
+// and apply it to our ledger (covers missed/misrouted webhooks). The server
+// also does this hourly on its own — this is for forcing it on demand.
+//
+// Needs a reachable database. Railway's injected DATABASE_URL uses the PRIVATE
+// hostname, which only resolves inside Railway, so `railway run` from a laptop
+// won't connect. Use either:
+//   • railway ssh -- node server/scripts/reconcile-transfers.js
+//   • enable the Postgres public TCP proxy and pass PUBLIC_DATABASE_URL
 import { PrismaClient } from "@prisma/client";
 import { getTransfer, applyTransferStatus, mapDwollaStatus } from "../dwolla/index.js";
 

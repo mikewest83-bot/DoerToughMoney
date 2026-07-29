@@ -1,14 +1,18 @@
 // Internal dispute administration. There's no admin UI yet, so disputes are
-// worked from the command line. Run with the app's env vars:
-//   railway run --service even-app -- node scripts/disputes-admin.js list
-//   railway run --service even-app -- node scripts/disputes-admin.js investigate <id>
-//   railway run --service even-app -- node scripts/disputes-admin.js credit <id>
-//   railway run --service even-app -- node scripts/disputes-admin.js resolve <id> upheld  "notes…"
-//   railway run --service even-app -- node scripts/disputes-admin.js resolve <id> denied  "notes…"
-//   railway run --service even-app -- node scripts/disputes-admin.js sweep
+// worked from the command line:
+//   node scripts/disputes-admin.js list
+//   node scripts/disputes-admin.js investigate <id>
+//   node scripts/disputes-admin.js credit <id>
+//   node scripts/disputes-admin.js resolve <id> upheld|denied "notes…"
+//   node scripts/disputes-admin.js sweep
 //
-// PUBLIC_DATABASE_URL overrides DATABASE_URL for runs outside Railway's
-// private network (the injected DATABASE_URL uses the internal hostname).
+// This needs a reachable database. Railway injects DATABASE_URL with the
+// PRIVATE hostname (postgres.railway.internal), which only resolves inside
+// Railway's network — so `railway run` from a laptop will NOT connect. Use one of:
+//   • `railway ssh -- node server/scripts/disputes-admin.js list` (runs in the
+//     container; needs an SSH key registered with Railway)
+//   • enable the Postgres service's public TCP proxy, then pass its URL as
+//     PUBLIC_DATABASE_URL, which overrides DATABASE_URL below
 import { PrismaClient } from "@prisma/client";
 import {
   startInvestigation, issueProvisionalCredit, resolveDispute,
