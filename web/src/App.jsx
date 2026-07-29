@@ -135,6 +135,13 @@ function Auth({ onDone, initialMode = "login" }) {
           style={{ marginTop: 18, background: "none", border: "none", color: C.muted, fontSize: 14 }}>
           {mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
         </button>
+
+        <p style={{ marginTop: 28, fontSize: 12, color: C.muted, textAlign: "center" }}>
+          By continuing you agree to our{" "}
+          <a href="/terms" style={{ color: C.muted, textDecoration: "underline" }}>Terms</a>{" "}
+          and{" "}
+          <a href="/privacy" style={{ color: C.muted, textDecoration: "underline" }}>Privacy Policy</a>.
+        </p>
       </div>
     </div>
   );
@@ -558,8 +565,64 @@ const bigBtn = { borderRadius: 16, padding: "14px 0", border: "none", fontWeight
   display: "flex", alignItems: "center", justifyContent: "center", gap: 8, cursor: "pointer" };
 const iconBtn = { background: "none", border: "none", padding: 4, cursor: "pointer", color: C.ink };
 
+// ── Legal pages ───────────────────────────────────────────
+// Placeholder copy — NOT reviewed by a lawyer. Swap in real counsel-drafted
+// terms before relying on this for a real money-moving product.
+function LegalPage({ title, updated, sections }) {
+  return (
+    <div style={{ minHeight: "100vh", background: pageBg, fontFamily: "Inter, system-ui, sans-serif", color: C.ink }}>
+      {fontStyle}
+      <div style={{ maxWidth: 640, margin: "0 auto", padding: "32px 20px 60px" }}>
+        <a href="/" style={{ color: C.brand, fontWeight: 700, fontSize: 14, textDecoration: "none" }}>← Back to even</a>
+        <h1 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: 30, fontWeight: 800, marginTop: 16, marginBottom: 4 }}>{title}</h1>
+        <p style={{ color: C.muted, fontSize: 13, marginBottom: 8 }}>Last updated {updated}</p>
+        <div style={{ background: "#FFF6E5", border: "1px solid #F0DDB0", borderRadius: 12, padding: "12px 14px", fontSize: 13, color: "#8A6416", marginBottom: 24 }}>
+          Template placeholder — this has not been reviewed by a lawyer. Replace with counsel-drafted terms before relying on it.
+        </div>
+        {sections.map(({ heading, body }) => (
+          <section key={heading} style={{ marginBottom: 22 }}>
+            <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{heading}</h2>
+            <p style={{ fontSize: 14.5, lineHeight: 1.6, color: "#3A3A44", margin: 0, whiteSpace: "pre-line" }}>{body}</p>
+          </section>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TermsPage() {
+  return (
+    <LegalPage title="Terms of Service" updated="July 2026" sections={[
+      { heading: "1. What even is", body: "even lets you hold a balance, send and request money from other even users, add funds from a card, and cash out to a linked bank account. Peer-to-peer transfers move within even's own ledger; adding funds and cashing out are processed by Stripe." },
+      { heading: "2. Your account", body: "You must be at least 18 years old and provide accurate information when registering. You're responsible for keeping your password secure and for all activity on your account." },
+      { heading: "3. Sending and receiving money", body: "Transfers between even users are final once completed. Make sure you're paying the right person — even cannot reverse a completed peer-to-peer transfer. Requests for money are not binding; the other person can decline." },
+      { heading: "4. Fees", body: "even may charge a fee on payments, shown to you before you confirm a transfer. Fees, if any, are disclosed at the time of the transaction." },
+      { heading: "5. Prohibited use", body: "You agree not to use even for illegal activity, fraud, money laundering, or to circumvent Stripe's or even's terms. We may suspend or close accounts that violate this." },
+      { heading: "6. Limitation of liability", body: "even is provided \"as is.\" To the extent permitted by law, even is not liable for indirect or consequential damages arising from your use of the service." },
+      { heading: "7. Changes", body: "We may update these terms from time to time. Continued use of even after changes take effect means you accept the updated terms." },
+      { heading: "8. Contact", body: "Questions about these terms? Reach out via the contact details on our website." },
+    ]} />
+  );
+}
+
+function PrivacyPage() {
+  return (
+    <LegalPage title="Privacy Policy" updated="July 2026" sections={[
+      { heading: "1. What we collect", body: "Account info you give us (name, handle, email, password — stored as a salted hash, never in plain text). Transaction data (who you paid, amounts, notes). Technical data (IP address, device/browser info) for security and fraud prevention." },
+      { heading: "2. How we use it", body: "To operate your account and process transfers, to communicate with you about your account, to detect and prevent fraud, and to comply with legal obligations." },
+      { heading: "3. Sharing", body: "We share what's necessary with Stripe to process card top-ups, bank payouts, and Connect account onboarding. We don't sell your personal data to third parties." },
+      { heading: "4. Your choices", body: "You can request a copy of your data or ask us to delete your account. Deleting your account removes your personal profile info; transaction records involving other users are retained as needed for their ledger accuracy and legal recordkeeping." },
+      { heading: "5. Security", body: "Passwords are hashed with bcrypt. We use industry-standard practices to protect your data, but no system is 100% secure — please use a strong, unique password." },
+      { heading: "6. Changes", body: "We may update this policy from time to time; continued use of even after changes take effect means you accept the updated policy." },
+      { heading: "7. Contact", body: "Questions about your data? Reach out via the contact details on our website." },
+    ]} />
+  );
+}
+
 export default function App() {
   const path = window.location.pathname;
+  if (path === "/terms") return <TermsPage />;
+  if (path === "/privacy") return <PrivacyPage />;
   const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
   const screen = path.startsWith("/pay/")
     ? <PayPage slug={decodeURIComponent(path.slice(5))} />

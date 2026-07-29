@@ -190,11 +190,43 @@ app.post("/api/links/:slug/checkout", async (req, res) => {
   res.json({ url });
 });
 
+const escapeHtml = (s = "") =>
+  String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const CRAWLER_UA = /facebookexternalhit|Twitterbot|Slackbot|LinkedInBot|WhatsApp|TelegramBot|Discordbot|redditbot|Googlebot|Applebot|Pinterest|SkypeUriPreview/i;
+
 // Serve the built web app from the same origin (used on Replit). SPA fallback
 // so client routes like /pay/:slug work on refresh. API + webhook are untouched.
 if (process.env.SERVE_WEB) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const dist = path.resolve(__dirname, "../web/dist");
+
+  // Social crawlers don't run JS, so give /pay/:slug a server-rendered OG
+  // preview instead of the SPA shell. Real browsers fall through to below.
+  app.get("/pay/:slug", async (req, res, next) => {
+    if (!CRAWLER_UA.test(req.headers["user-agent"] || "")) return next();
+    const link = await getPaymentLinkWithPayee(req.params.slug);
+    if (!link || !link.active) return next();
+
+    const title = escapeHtml(`Pay ${link.payee?.name || "someone"} on even`);
+    const amountText = link.amountCents ? `$${(link.amountCents / 100).toFixed(2)}` : "any amount";
+    const description = escapeHtml(`${link.note ? link.note + " — " : ""}Send ${amountText} instantly via even.`);
+    const origin = process.env.WEB_ORIGIN || `${req.protocol}://${req.get("host")}`;
+    const url = escapeHtml(`${origin}/pay/${req.params.slug}`);
+    const image = escapeHtml(`${origin}/pwa-512.png`);
+
+    res.set("Content-Type", "text/html").send(`<!doctype html>
+<html><head>
+<meta charset="utf-8">
+<title>${title}</title>
+<meta property="og:title" content="${title}">
+<meta property="og:description" content="${description}">
+<meta property="og:url" content="${url}">
+<meta property="og:type" content="website">
+<meta property="og:image" content="${image}">
+<meta name="twitter:card" content="summary">
+</head><body></body></html>`);
+  });
+
   app.use(express.static(dist));
   app.get(/^(?!\/api).*/, (_req, res) => res.sendFile(path.join(dist, "index.html")));
 }
