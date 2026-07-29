@@ -1,15 +1,9 @@
 export function validateProductionConfig() {
   if (process.env.NODE_ENV !== "production") return;
-  const required = ["DATABASE_URL", "JWT_SECRET", "WEB_ORIGIN"];
+  const required = ["DATABASE_URL", "JWT_SECRET", "STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET", "WEB_ORIGIN"];
   const missing = required.filter((name) => !process.env[name]);
   if (missing.length) throw new Error(`Missing required production environment variables: ${missing.join(", ")}`);
   if (process.env.JWT_SECRET.length < 32) throw new Error("JWT_SECRET must be at least 32 characters in production");
-
-  // Stripe is optional at boot — stripe.js throws lazily on first use instead,
-  // so the app still runs (auth, P2P pay) without it configured.
-  const stripeVars = ["STRIPE_SECRET_KEY", "STRIPE_WEBHOOK_SECRET"];
-  const missingStripe = stripeVars.filter((name) => !process.env[name]);
-  if (missingStripe.length) console.warn(`Stripe not configured (missing ${missingStripe.join(", ")}) — bank/top-up/cash-out will fail until set.`);
 }
 
 // The user row that collects platform fees (seeded by migration 0003).
