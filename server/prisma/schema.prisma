@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String   @id @default(cuid())
+  name            String
+  handle          String   @unique
+  email           String   @unique
+  passwordHash    String
+  balanceCents    Int      @default(0)
+  stripeAccountId String?
+  createdAt       DateTime @default(now())
+
+  sentTxns        Transaction[] @relation("from")
+  receivedTxns    Transaction[] @relation("to")
+}
+
+model Transaction {
+  id          String   @id @default(cuid())
+  fromUserId  String?
+  toUserId    String?
+  fromUser    User?    @relation("from", fields: [fromUserId], references: [id])
+  toUser      User?    @relation("to", fields: [toUserId], references: [id])
+  amountCents Int
+  feeCents    Int      @default(0)
+  note        String?
+  kind        String   // pay | request | topup | payout
+  status      String   // complete | pending
+  stripeSessionId  String?  @unique
+  stripeTransferId String?  @unique
+  stripePayoutId   String?  @unique
+  createdAt         DateTime @default(now())
+
+  @@index([fromUserId])
+  @@index([toUserId])
+}
+
+// Makes mutating money endpoints safe to retry: a client sends an
+// Idempotency-Key header; the same key replays the stored response
+// instead of moving money twice.
+model IdempotencyKey {
+  id        String   @id @default(cuid())
+  key       String
+  userId    String
+  status    Int      @default(0) // 0 = in progress, else the HTTP status
+  response  Json
+  createdAt DateTime @default(now())
+
+  @@unique([userId, key])
+}
+
+model StripeEvent {
+  id        String   @id @default(cuid())
+  eventId   String   @unique
+  type      String
+  createdAt DateTime @default(now())
+}
+
+model PaymentLink {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  userId      String
+  amountCents Int?     // null = payer chooses the amount
+  note        String?
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  @@index([userId])
+}
