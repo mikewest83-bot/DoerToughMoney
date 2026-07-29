@@ -12,6 +12,8 @@ export {
   verifyMicroDeposits,
   listFundingSources,
   removeFundingSource,
+  getFundingSourceChannels,
+  supportsInstant,
 } from "./fundingSources.js";
 export { createTransfer, getTransfer } from "./transfers.js";
 export { applyTransferStatus, reconcile, mapDwollaStatus } from "./ledger.js";

@@ -183,7 +183,11 @@ function Wallet({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
   const [feed, setFeed] = useState([]);
-  const [feeCfg, setFeeCfg] = useState({ feeBps: 0, feeFlatCents: 0, feeCapCents: null });
+  const [feeCfg, setFeeCfg] = useState({
+    feeBps: 0, feeFlatCents: 0, feeCapCents: null,
+    expediteOffered: false, expediteFeeBps: 0, expediteFeeFlatCents: 0, expediteFeeCapCents: null,
+  });
+  const [speed, setSpeed] = useState("STANDARD");
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState("who");
@@ -222,16 +226,21 @@ function Wallet({ initialAuthMode = "login" }) {
   }, [open, step, query]);
 
   const amountNum = parseFloat(amount) || 0;
-  const feePreview = (() => {
-    if (mode !== "pay") return 0;
+  // Mirrors computeFee on the server so the sender sees the real number first.
+  const previewFee = (bps, flat, cap) => {
     const cents = Math.round(amountNum * 100);
     if (cents <= 0) return 0;
-    let fee = Math.round((cents * (feeCfg.feeBps || 0)) / 10000) + (feeCfg.feeFlatCents || 0);
-    if (feeCfg.feeCapCents != null) fee = Math.min(fee, feeCfg.feeCapCents);
+    let fee = Math.round((cents * (bps || 0)) / 10000) + (flat || 0);
+    if (cap != null) fee = Math.min(fee, cap);
     return Math.max(0, fee) / 100;
-  })();
+  };
+  const baseFeePreview = mode === "pay" ? previewFee(feeCfg.feeBps, feeCfg.feeFlatCents, feeCfg.feeCapCents) : 0;
+  const expediteFeePreview = mode === "pay"
+    ? previewFee(feeCfg.expediteFeeBps, feeCfg.expediteFeeFlatCents, feeCfg.expediteFeeCapCents) : 0;
+  const feePreview = baseFeePreview + (speed === "EXPRESS" ? expediteFeePreview : 0);
+  const showSpeedPicker = mode === "pay" && feeCfg.expediteOffered && target?.canReceive;
   const payEligible = user?.kycStatus === "VERIFIED" && user?.bankVerified;
-  const start = (m) => { setMode(m); setStep("who"); setTarget(null); setAmount("0"); setNote(""); setQuery(""); setError(""); setOpen(true); };
+  const start = (m) => { setMode(m); setStep("who"); setTarget(null); setAmount("0"); setNote(""); setQuery(""); setError(""); setSpeed("STANDARD"); setOpen(true); };
   const press = (k) => {
     setError("");
     setAmount((p) => {
@@ -249,9 +258,13 @@ function Wallet({ initialAuthMode = "login" }) {
     try {
       const body = { handle: target.handle, amount: amountNum, note: note.trim() };
       let paidFee = 0;
-      if (mode === "pay") { const r = await api.pay(body); paidFee = (r.feeCents || 0) / 100; }
-      else await api.request(body);
-      setLast({ mode, who: target.name, amount: amountNum, fee: paidFee, note: note.trim() || (mode === "pay" ? "payment" : "request") });
+      let usedInstant = false;
+      if (mode === "pay") {
+        const r = await api.pay({ ...body, speed });
+        paidFee = (r.feeCents || 0) / 100;
+        usedInstant = !!r.usedInstant;
+      } else await api.request(body);
+      setLast({ mode, who: target.name, amount: amountNum, fee: paidFee, speed, usedInstant, note: note.trim() || (mode === "pay" ? "payment" : "request") });
       await refresh();
       setStep("done");
     } catch (e) { setError(e.message); } finally { setBusy(false); }
@@ -617,6 +630,33 @@ function Wallet({ initialAuthMode = "login" }) {
                   </div>
                   <input value={note} onChange={(e) => setNote(e.target.value)} placeholder="What's it for? 🍕"
                     style={{ textAlign: "center", border: "none", outline: "none", margin: "4px auto 0", borderRadius: 999, padding: "8px 16px", fontSize: 14, background: C.canvas, width: "80%" }} />
+                  {showSpeedPicker && (
+                    <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+                      {[
+                        { key: "STANDARD", title: "Standard", sub: "1–3 business days", cost: "Free" },
+                        {
+                          key: "EXPRESS",
+                          title: target.instantEligible ? "Instant" : "Express",
+                          sub: target.instantEligible ? "Arrives in minutes" : "Same business day",
+                          cost: amountNum > 0 ? `$${money(expediteFeePreview)}` : "—",
+                        },
+                      ].map((o) => {
+                        const on = speed === o.key;
+                        return (
+                          <button key={o.key} onClick={() => setSpeed(o.key)}
+                            style={{
+                              flex: 1, textAlign: "left", padding: "10px 12px", borderRadius: 14, cursor: "pointer",
+                              border: `1.5px solid ${on ? C.brand : C.line}`,
+                              background: on ? C.brandSoft : C.surface,
+                            }}>
+                            <div style={{ fontSize: 13.5, fontWeight: 700, color: on ? C.brand : C.ink }}>{o.title}</div>
+                            <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1 }}>{o.sub}</div>
+                            <div style={{ fontSize: 12, fontWeight: 600, marginTop: 3, color: on ? C.brand : C.muted }}>{o.cost}</div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                   {mode === "pay" && feePreview > 0 && amountNum > 0 && (
                     <p style={{ textAlign: "center", marginTop: 8, fontSize: 12.5, color: C.muted }}>
                       They receive ${money(amountNum)} · ${money(feePreview)} fee · you pay ${money(amountNum + feePreview)}
@@ -648,8 +688,13 @@ function Wallet({ initialAuthMode = "login" }) {
                   <p style={{ color: C.muted, fontSize: 14.5, marginTop: 4 }}>
                     {last.mode === "pay" ? `$${money(last.amount)} to ${last.who}` : `Asked ${last.who} for $${money(last.amount)}`}
                   </p>
-                  {last.mode === "pay" && last.fee > 0 && (
-                    <p style={{ color: C.muted, fontSize: 13, marginTop: 2 }}>includes ${money(last.fee)} fee</p>
+                  {last.mode === "pay" && (
+                    <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>
+                      {last.usedInstant ? "Arriving in minutes"
+                        : last.speed === "EXPRESS" ? "Arriving same business day"
+                        : "Arriving in 1–3 business days"}
+                      {last.fee > 0 ? ` · includes $${money(last.fee)} fee` : ""}
+                    </p>
                   )}
                   <p style={{ fontSize: 14, marginTop: 10 }}>{last.note}</p>
                   <button onClick={() => setOpen(false)} style={{ borderRadius: 16, padding: 14, marginTop: 32, width: "100%", border: "none", background: C.ink, color: "#fff", fontWeight: 700, fontSize: 15.5 }}>Done</button>

@@ -16,11 +16,18 @@ import {
   dwollaWebhook, checkVelocity, VelocityError, createTransfer,
   addBankManual, initiateMicroDeposits, verifyMicroDeposits,
   startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
-  fileDispute, makeCreditFlows,
+  fileDispute, makeCreditFlows, getFundingSourceChannels, supportsInstant,
 } from "./dwolla/index.js";
 import { idempotency } from "./idempotency.js";
 import { validateAmount, shapeTxn, computeFee } from "./logic.js";
-import { validateProductionConfig, feeParams, dwollaConfigured } from "./config.js";
+import {
+  validateProductionConfig, feeParams, dwollaConfigured,
+  expediteFeeParams, expediteOffered, rtpEnabled,
+} from "./config.js";
+
+// Instant delivery needs both the recipient's bank and our own Dwolla account
+// to support Real Time Payments.
+const canSendInstantly = (user) => rtpEnabled() && supportsInstant(user.fundingSourceChannels);
 
 validateProductionConfig();
 
@@ -54,10 +61,16 @@ const moneyLimiter = limit(30, "Slow down a moment and try again.");
 
 app.use("/api", apiLimiter);
 
-// Public: lets the client preview the platform fee before a payment.
+// Public: lets the client preview fees before a payment.
 app.get("/api/config", (_req, res) => {
   const { bps, flatCents, capCents } = feeParams();
-  res.json({ feeBps: bps, feeFlatCents: flatCents, feeCapCents: Number.isFinite(capCents) ? capCents : null });
+  const ex = expediteFeeParams();
+  res.json({
+    feeBps: bps, feeFlatCents: flatCents, feeCapCents: Number.isFinite(capCents) ? capCents : null,
+    expediteOffered: expediteOffered(),
+    expediteFeeBps: ex.bps, expediteFeeFlatCents: ex.flatCents,
+    expediteFeeCapCents: Number.isFinite(ex.capCents) ? ex.capCents : null,
+  });
 });
 
 // ── auth ─────────────────────────────────────────────────
@@ -76,7 +89,14 @@ app.get("/api/feed", authRequired, async (req, res) => {
 
 app.get("/api/users", authRequired, async (req, res) => {
   const q = (req.query.q || "").toString().trim();
-  res.json({ users: await searchUsers(q, req.user.id) });
+  const users = (await searchUsers(q, req.user.id)).map((u) => ({
+    id: u.id, name: u.name, handle: u.handle,
+    canReceive: u.fundingSourceVerified,
+    // Drives the express option's copy: only claim "instant" when the transfer
+    // can genuinely ride RTP, otherwise express is same-business-day.
+    instantEligible: canSendInstantly(u),
+  }));
+  res.json({ users });
 });
 
 // ── complete identity verification (pre-migration accounts) ──
@@ -108,13 +128,16 @@ app.post("/api/bank/verify", authRequired, moneyLimiter, async (req, res) => {
   } catch {
     return res.status(400).json({ error: "Those amounts don't match. Check your bank statement and try again." });
   }
-  await setFundingSourceVerified(req.user.id);
+  // Record which processing channels this bank supports — it decides whether
+  // express payments to this user can ride Instant Payments or Same Day ACH.
+  const channels = await getFundingSourceChannels(req.user.fundingSourceUrl).catch(() => ["ach"]);
+  await setFundingSourceVerified(req.user.id, channels);
   res.json({ user: publicUser(await getUserById(req.user.id)) });
 });
 
 // ── pay (real bank-to-bank transfer via Dwolla) ─────────────
 app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const { handle, amount, note } = req.body || {};
+  const { handle, amount, note, speed: requestedSpeed } = req.body || {};
   const v = validateAmount(amount);
   if (!v.ok) return res.status(400).json({ error: v.error });
 
@@ -127,7 +150,12 @@ app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) =
   if (!recipient.fundingSourceVerified)
     return res.status(400).json({ error: `${recipient.name} hasn't linked a verified bank account yet.` });
 
-  const feeCents = computeFee(v.cents, feeParams());
+  // Express is only honored when it's actually priced, so a misbehaving client
+  // can't get Same Day/Instant delivery (which costs us more) for free.
+  const speed = requestedSpeed === "EXPRESS" && expediteOffered() ? "EXPRESS" : "STANDARD";
+  const baseFeeCents = computeFee(v.cents, feeParams());
+  const expediteFeeCents = speed === "EXPRESS" ? computeFee(v.cents, expediteFeeParams()) : 0;
+  const feeCents = baseFeeCents + expediteFeeCents;
 
   try {
     await checkVelocity(prisma, { userId: req.user.id, amountCents: v.cents });
@@ -136,21 +164,24 @@ app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) =
     throw e;
   }
 
-  const { dwollaTransferUrl, dwollaTransferId, idempotencyKey } = await createTransfer({
+  const { dwollaTransferUrl, dwollaTransferId, idempotencyKey, usedInstant } = await createTransfer({
     sourceFundingSourceUrl: req.user.fundingSourceUrl,
     destinationFundingSourceUrl: recipient.fundingSourceUrl,
     amountCents: v.cents,
     feeCents,
     feeChargeToCustomerUrl: feeCents > 0 ? req.user.dwollaCustomerUrl : undefined,
     idempotencyKey: newIdempotencyKey(),
+    speed,
+    destinationSupportsInstant: canSendInstantly(recipient),
   });
 
   await createTransferRecord({
     idempotencyKey, providerRef: dwollaTransferId, providerUrl: dwollaTransferUrl,
-    senderId: req.user.id, recipientId: recipient.id, amountCents: v.cents, feeCents, note,
+    senderId: req.user.id, recipientId: recipient.id,
+    amountCents: v.cents, feeCents, expediteFeeCents, speed, note,
   });
 
-  res.json({ user: publicUser(req.user), feeCents, amountCents: v.cents });
+  res.json({ user: publicUser(req.user), feeCents, expediteFeeCents, amountCents: v.cents, speed, usedInstant });
 });
 
 // ── disputes (Reg E) ─────────────────────────────────────

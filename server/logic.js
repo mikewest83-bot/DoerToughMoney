@@ -36,7 +36,7 @@ export const shapeTxn = (t, me) => {
   const dir = txnDirection(t, me);
   const other = t.fromUserId === me ? t.toUser : t.fromUser;
   return {
-    id: t.id, dir, kind: t.kind, status: t.status,
+    id: t.id, dir, kind: t.kind, status: t.status, speed: t.speed,
     who: other?.name || "even", handle: other?.handle || "",
     amount: dollars(t.amountCents), note: t.note, at: t.createdAt,
   };

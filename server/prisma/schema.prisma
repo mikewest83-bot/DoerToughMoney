@@ -22,6 +22,15 @@ enum TransferStatus {
   RETURNED
 }
 
+// STANDARD  — plain ACH both legs: ~3-4 business days to debit, 1-2 to credit.
+// EXPRESS   — Same Day ACH on the debit, and Instant Payments (RTP/FedNow) on
+//             the credit when the recipient's bank supports it, else Same Day
+//             ACH there too. Carries the expedite fee.
+enum TransferSpeed {
+  STANDARD
+  EXPRESS
+}
+
 enum DisputeStatus {
   FILED
   INVESTIGATING
@@ -40,6 +49,10 @@ model User {
   kycStatus             KycStatus @default(PENDING)
   fundingSourceUrl      String?
   fundingSourceVerified Boolean   @default(false)
+  // Processing channels the linked bank supports, straight from Dwolla, e.g.
+  // ["ach"] or ["ach","real-time-payments"]. Presence of real-time-payments
+  // means this account can receive Instant Payments.
+  fundingSourceChannels String[]  @default([])
   createdAt             DateTime  @default(now())
 
   sentTransfers     Transfer[] @relation("sender")
@@ -62,9 +75,13 @@ model Transfer {
   sender         User           @relation("sender", fields: [senderId], references: [id])
   recipient      User           @relation("recipient", fields: [recipientId], references: [id])
   amountCents    Int
+  // Total facilitator fee charged to the sender (platform + expedite).
   feeCents       Int            @default(0)
+  // The portion of feeCents that was for faster delivery, for reporting.
+  expediteFeeCents Int          @default(0)
   feeCollected   Boolean        @default(false)
   note           String?
+  speed          TransferSpeed  @default(STANDARD)
   status         TransferStatus @default(PENDING)
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt

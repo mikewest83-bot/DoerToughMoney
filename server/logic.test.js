@@ -112,3 +112,25 @@ describe("computeFee", () => {
     expect(computeFee(NaN, { bps: 150 })).toBe(0);
   });
 });
+
+// The express upgrade prices the same way as the base fee, just with its own
+// params, so a payment's total is base + expedite (expedite only when chosen).
+describe("express (expedite) fee pricing", () => {
+  const base = { bps: 0, flatCents: 0 };            // standard sends free
+  const expedite = { bps: 175, flatCents: 0 };      // 1.75% for speed
+
+  it("charges nothing extra on a standard send", () => {
+    expect(computeFee(5000, base)).toBe(0);
+  });
+  it("charges the expedite rate on top when express is chosen", () => {
+    expect(computeFee(5000, base) + computeFee(5000, expedite)).toBe(88); // 1.75% of $50
+    expect(computeFee(2000, base) + computeFee(2000, expedite)).toBe(35); // 1.75% of $20
+  });
+  it("respects an expedite cap so large sends don't get a huge speed fee", () => {
+    expect(computeFee(1000000, { ...expedite, capCents: 1500 })).toBe(1500);
+  });
+  it("supports flat-fee pricing for speed", () => {
+    expect(computeFee(2500, { bps: 0, flatCents: 50 })).toBe(50);
+    expect(computeFee(100000, { bps: 0, flatCents: 50 })).toBe(50);
+  });
+});

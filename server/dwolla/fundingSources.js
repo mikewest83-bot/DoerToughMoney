@@ -47,6 +47,19 @@ export async function listFundingSources(customerUrl) {
   return res.body._embedded["funding-sources"];
 }
 
+/**
+ * Processing channels a funding source supports, e.g. ["ach"] or
+ * ["ach","real-time-payments"]. Presence of real-time-payments means the
+ * account can receive Instant Payments; without it, Same Day ACH is the
+ * fastest available payout. Returns ["ach"] if Dwolla omits the field.
+ */
+export async function getFundingSourceChannels(fundingSourceUrl) {
+  const res = await dwolla.get(fundingSourceUrl);
+  return res.body.channels?.length ? res.body.channels : ["ach"];
+}
+
+export const supportsInstant = (channels = []) => channels.includes("real-time-payments");
+
 /** Soft-remove a funding source. */
 export async function removeFundingSource(fundingSourceUrl) {
   await dwolla.post(fundingSourceUrl, { removed: true });

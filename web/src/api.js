@@ -38,6 +38,7 @@ export const api = {
   feed: () => req("/api/feed"),
   users: (q) => req(`/api/users?q=${encodeURIComponent(q || "")}`),
   pay: (b) => req("/api/pay", { method: "POST", body: b, idempotent: true }),
+  // b: { handle, amount, note, speed?: "STANDARD" | "EXPRESS" }
   request: (b) => req("/api/request", { method: "POST", body: b, idempotent: true }),
   verifyIdentity: (b) => req("/api/verify-identity", { method: "POST", body: b }),
   fileDispute: (b) => req("/api/disputes", { method: "POST", body: b, idempotent: true }),

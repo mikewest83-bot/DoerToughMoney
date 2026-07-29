@@ -33,3 +33,32 @@ export const feeParams = () => {
   const capCents = capRaw ? Number.parseInt(capRaw, 10) : Infinity;
   return { bps, flatCents, capCents };
 };
+
+// Fee for the optional faster-delivery upgrade, charged only when the sender
+// chooses EXPRESS. Priced separately from the base fee so the free-standard /
+// paid-express split can be tuned independently.
+//   EXPEDITE_FEE_BPS         basis points, e.g. 175 = 1.75%
+//   EXPEDITE_FEE_FLAT_CENTS  flat add-on, in cents
+//   EXPEDITE_FEE_CAP_CENTS   optional maximum, in cents
+export const expediteFeeParams = () => {
+  const bps = Number.parseInt(process.env.EXPEDITE_FEE_BPS || "0", 10) || 0;
+  const flatCents = Number.parseInt(process.env.EXPEDITE_FEE_FLAT_CENTS || "0", 10) || 0;
+  const capRaw = process.env.EXPEDITE_FEE_CAP_CENTS;
+  const capCents = capRaw ? Number.parseInt(capRaw, 10) : Infinity;
+  return { bps, flatCents, capCents };
+};
+
+// Express is only offered when it's actually priced — otherwise it'd be a free
+// upgrade nobody would decline, and every transfer would cost us Same Day fees.
+export const expediteOffered = () => {
+  const { bps, flatCents } = expediteFeeParams();
+  return bps > 0 || flatCents > 0;
+};
+
+// Instant Payments (RTP/FedNow) requires TWO things: the recipient's bank must
+// list the real-time-payments channel, AND Real Time Payments must be enabled
+// on our own Dwolla account — a capability you request from Dwolla separately.
+// Without the account-level grant, Dwolla rejects the transfer outright with
+// "Real Time Payments not enabled for this account", so this stays off until
+// that's granted and express quietly delivers via Same Day ACH instead.
+export const rtpEnabled = () => process.env.DWOLLA_RTP_ENABLED === "true";

@@ -20,7 +20,7 @@ export const searchUsers = (q, excludeId) =>
         { handle: { contains: q, mode: "insensitive" } },
       ],
     },
-    select: { id: true, name: true, handle: true },
+    select: { id: true, name: true, handle: true, fundingSourceVerified: true, fundingSourceChannels: true },
     orderBy: { name: "asc" },
     take: 25,
   });
@@ -36,15 +36,19 @@ export const setKycStatusByCustomerUrlSuffix = (dwollaCustomerId, kycStatus) =>
   });
 
 export const setFundingSource = (userId, fundingSourceUrl) =>
-  prisma.user.update({ where: { id: userId }, data: { fundingSourceUrl, fundingSourceVerified: false } });
+  prisma.user.update({ where: { id: userId }, data: { fundingSourceUrl, fundingSourceVerified: false, fundingSourceChannels: [] } });
 
-export const setFundingSourceVerified = (userId) =>
-  prisma.user.update({ where: { id: userId }, data: { fundingSourceVerified: true } });
+export const setFundingSourceVerified = (userId, channels = []) =>
+  prisma.user.update({ where: { id: userId }, data: { fundingSourceVerified: true, fundingSourceChannels: channels } });
 
 // ── transfers (Dwolla-backed) ────────────────────────────
-export const createTransferRecord = ({ idempotencyKey, providerRef, providerUrl, senderId, recipientId, amountCents, feeCents = 0, note }) =>
+export const createTransferRecord = ({ idempotencyKey, providerRef, providerUrl, senderId, recipientId, amountCents, feeCents = 0, expediteFeeCents = 0, speed = "STANDARD", note }) =>
   prisma.transfer.create({
-    data: { idempotencyKey, providerRef, providerUrl, senderId, recipientId, amountCents, feeCents, note: note || "payment", status: "PENDING" },
+    data: {
+      idempotencyKey, providerRef, providerUrl, senderId, recipientId,
+      amountCents, feeCents, expediteFeeCents, speed,
+      note: note || "payment", status: "PENDING",
+    },
   });
 
 // ── requests (no money movement) ─────────────────────────
@@ -77,7 +81,7 @@ export const feedForUser = async (userId) => {
   ]);
 
   const shapedTransfers = transfers.map((t) => ({
-    id: t.id, kind: "pay", status: t.status,
+    id: t.id, kind: "pay", status: t.status, speed: t.speed,
     amountCents: t.amountCents, feeCents: t.feeCents, note: t.note, createdAt: t.createdAt,
     fromUserId: t.senderId, toUserId: t.recipientId, fromUser: t.sender, toUser: t.recipient,
   }));
