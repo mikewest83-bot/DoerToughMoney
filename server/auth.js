@@ -27,17 +27,25 @@ const splitName = (name) => {
 const dwollaErrorMessage = (e) =>
   e?.body?._embedded?.errors?.[0]?.message || e?.body?.message || "We couldn't verify your identity with the information provided.";
 
+// Validate the KYC fields shared by register and verify-identity.
+// Returns an error string, or null if everything checks out.
+const identityFieldsError = ({ address1, city, state, postalCode, dateOfBirth, ssn }) => {
+  if (!address1 || !city || !state || !postalCode || !dateOfBirth || !ssn)
+    return "Address, date of birth, and SSN are required to verify your identity.";
+  if (!/^[A-Za-z]{2}$/.test(state)) return "State must be a 2-letter code.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) return "Date of birth must be YYYY-MM-DD.";
+  if (!/^\d{9}$/.test(String(ssn).replace(/-/g, ""))) return "Enter a full 9-digit SSN.";
+  return null;
+};
+
 export async function register(req, res) {
   const { name, handle, email, password, address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
   if (!name || !handle || !email || !password)
     return res.status(400).json({ error: "Name, handle, email, and password are all required." });
   if (password.length < 8)
     return res.status(400).json({ error: "Use a password of at least 8 characters." });
-  if (!address1 || !city || !state || !postalCode || !dateOfBirth || !ssn)
-    return res.status(400).json({ error: "Address, date of birth, and SSN are required to verify your identity." });
-  if (!/^[A-Za-z]{2}$/.test(state)) return res.status(400).json({ error: "State must be a 2-letter code." });
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) return res.status(400).json({ error: "Date of birth must be YYYY-MM-DD." });
-  if (!/^\d{9}$/.test(String(ssn).replace(/-/g, ""))) return res.status(400).json({ error: "Enter a full 9-digit SSN." });
+  const fieldErr = identityFieldsError({ address1, city, state, postalCode, dateOfBirth, ssn });
+  if (fieldErr) return res.status(400).json({ error: fieldErr });
 
   const normalizedEmail = String(email).trim().toLowerCase();
   const h = cleanHandle(handle).toLowerCase();
@@ -68,6 +76,38 @@ export async function register(req, res) {
   await setDwollaCustomer(user.id, { dwollaCustomerUrl, kycStatus });
   const withDwolla = await getUserById(user.id);
   res.json({ token: sign(withDwolla), user: publicUser(withDwolla) });
+}
+
+// Complete identity verification for an account created before the Dwolla
+// migration (it has no Verified Customer yet). Same fields and flow as
+// registration; SSN passes straight to Dwolla and is never stored.
+export async function verifyIdentity(req, res) {
+  if (req.user.dwollaCustomerUrl) {
+    // Customer already exists — just re-read status (covers webhook misses).
+    const kycStatus = (await getCustomerStatus(req.user.dwollaCustomerUrl)).toUpperCase();
+    await setDwollaCustomer(req.user.id, { dwollaCustomerUrl: req.user.dwollaCustomerUrl, kycStatus });
+    return res.json({ user: publicUser(await getUserById(req.user.id)) });
+  }
+
+  const { address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
+  const fieldErr = identityFieldsError({ address1, city, state, postalCode, dateOfBirth, ssn });
+  if (fieldErr) return res.status(400).json({ error: fieldErr });
+
+  const { firstName, lastName } = splitName(req.user.name);
+  let dwollaCustomerUrl;
+  try {
+    dwollaCustomerUrl = await createVerifiedCustomer({
+      firstName, lastName, email: req.user.email,
+      address1: String(address1).trim(), city: String(city).trim(),
+      state: state.toUpperCase(), postalCode: String(postalCode).trim(),
+      dateOfBirth, ssn: String(ssn).replace(/-/g, ""),
+    });
+  } catch (e) {
+    return res.status(400).json({ error: dwollaErrorMessage(e) });
+  }
+  const kycStatus = (await getCustomerStatus(dwollaCustomerUrl)).toUpperCase();
+  await setDwollaCustomer(req.user.id, { dwollaCustomerUrl, kycStatus });
+  res.json({ user: publicUser(await getUserById(req.user.id)) });
 }
 
 export async function login(req, res) {

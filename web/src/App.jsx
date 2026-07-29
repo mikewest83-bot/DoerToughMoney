@@ -248,6 +248,19 @@ function Wallet({ initialAuthMode = "login" }) {
     } catch (e) { setError(e.message); } finally { setBusy(false); }
   };
 
+  // ── identity verification for pre-migration accounts ──
+  const [idOpen, setIdOpen] = useState(false);
+  const [idForm, setIdForm] = useState({ address1: "", city: "", state: "", postalCode: "", dateOfBirth: "", ssn: "" });
+  const [idBusy, setIdBusy] = useState(false);
+  const [idErr, setIdErr] = useState("");
+
+  const openIdentity = () => { setIdForm({ address1: "", city: "", state: "", postalCode: "", dateOfBirth: "", ssn: "" }); setIdErr(""); setIdOpen(true); };
+  const submitIdentity = async () => {
+    setIdBusy(true); setIdErr("");
+    try { const { user } = await api.verifyIdentity(idForm); setUser(user); setIdOpen(false); }
+    catch (e) { setIdErr(e.message); } finally { setIdBusy(false); }
+  };
+
   // ── bank linking (manual routing/account + micro-deposits) ──
   const [bankOpen, setBankOpen] = useState(false);
   const [bankForm, setBankForm] = useState({ routingNumber: "", accountNumber: "", bankAccountType: "checking", name: "" });
@@ -312,7 +325,10 @@ function Wallet({ initialAuthMode = "login" }) {
               <span style={{ fontSize: 14.5, color: "#D8D8E2" }}>{bankStatusLabel}</span>
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-              {!user.hasBank && (
+              {user.kycStatus !== "VERIFIED" && (
+                <button onClick={openIdentity} style={pill}><ShieldCheck size={14} /> Verify identity</button>
+              )}
+              {user.kycStatus === "VERIFIED" && !user.hasBank && (
                 <button onClick={openBankLink} style={pill}><Building2 size={14} /> Link bank</button>
               )}
               {user.hasBank && !user.bankVerified && (
@@ -361,6 +377,37 @@ function Wallet({ initialAuthMode = "login" }) {
             ))}
           </div>
         </section>
+
+        {idOpen && (
+          <div onClick={() => setIdOpen(false)}
+            style={{ position: "absolute", inset: 0, zIndex: 25, display: "flex", flexDirection: "column", justifyContent: "flex-end", background: "rgba(20,19,26,.4)" }}>
+            <div className="sheet-enter" onClick={(e) => e.stopPropagation()}
+              style={{ background: C.surface, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: "16px 20px 28px" }}>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span style={{ fontWeight: 700, fontSize: 15 }}>Verify your identity</span>
+                <button onClick={() => setIdOpen(false)} style={iconBtn}><X size={22} /></button>
+              </div>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>
+                One-time check run by our payment partner. Your SSN is used only for verification — never stored by even.
+              </p>
+              <div style={{ marginTop: 10 }}>
+                <input value={idForm.address1} onChange={(e) => setIdForm((f) => ({ ...f, address1: e.target.value }))} placeholder="Street address" style={sheetInput} />
+                <input value={idForm.city} onChange={(e) => setIdForm((f) => ({ ...f, city: e.target.value }))} placeholder="City" style={sheetInput} />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input value={idForm.state} onChange={(e) => setIdForm((f) => ({ ...f, state: e.target.value }))} placeholder="State (e.g. CA)" style={{ ...sheetInput, flex: 1 }} />
+                  <input value={idForm.postalCode} onChange={(e) => setIdForm((f) => ({ ...f, postalCode: e.target.value }))} placeholder="ZIP" inputMode="numeric" style={{ ...sheetInput, flex: 1 }} />
+                </div>
+                <input value={idForm.dateOfBirth} onChange={(e) => setIdForm((f) => ({ ...f, dateOfBirth: e.target.value }))} placeholder="Date of birth" type="date" style={sheetInput} />
+                <input value={idForm.ssn} onChange={(e) => setIdForm((f) => ({ ...f, ssn: e.target.value }))} placeholder="Social Security Number" inputMode="numeric" style={sheetInput} />
+                {idErr && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 8 }}>{idErr}</p>}
+                <button onClick={submitIdentity} disabled={idBusy}
+                  style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: idBusy ? 0.6 : 1 }}>
+                  {idBusy ? "…" : "Verify"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {bankOpen && (
           <div onClick={() => setBankOpen(false)}

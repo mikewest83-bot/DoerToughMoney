@@ -6,7 +6,7 @@ import "express-async-errors"; // route async throws reach the error handler bel
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
-import { register, login, authRequired, publicUser } from "./auth.js";
+import { register, login, verifyIdentity, authRequired, publicUser } from "./auth.js";
 import prisma, {
   getUserById, getUserByHandle, searchUsers, feedForUser,
   createTransferRecord, logRequest, newIdempotencyKey,
@@ -76,6 +76,9 @@ app.get("/api/users", authRequired, async (req, res) => {
   const q = (req.query.q || "").toString().trim();
   res.json({ users: await searchUsers(q, req.user.id) });
 });
+
+// ── complete identity verification (pre-migration accounts) ──
+app.post("/api/verify-identity", authRequired, moneyLimiter, verifyIdentity);
 
 // ── link a bank (manual routing/account + micro-deposits) ──
 app.post("/api/bank/link", authRequired, moneyLimiter, async (req, res) => {
