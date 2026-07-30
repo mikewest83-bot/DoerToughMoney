@@ -144,11 +144,32 @@ function Auth({ onDone, initialMode = "login" }) {
     } catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
 
-  const field = (ph, k, type = "text") => (
-    <input value={form[k]} onChange={set(k)} placeholder={ph} type={type}
-      style={{ width: "100%", padding: "13px 15px", borderRadius: 14, border: `1px solid ${C.line}`,
-        background: C.surface, fontSize: 15, marginTop: 10 }} />
-  );
+  const inputStyle = {
+    width: "100%", padding: "13px 15px", borderRadius: 14, border: `1px solid ${C.line}`,
+    background: C.surface, fontSize: 15, marginTop: 10,
+  };
+
+  /**
+   * @param ph    placeholder — also the accessible label
+   * @param opts  autoComplete lets password managers and browser autofill do the
+   *              work on what is otherwise a ten-field form. `label` renders
+   *              visible text above the input, which date fields need: type=date
+   *              ignores placeholder entirely, so without it the user just sees
+   *              mm/dd/yyyy with no idea which date is being asked for.
+   */
+  const field = (ph, k, type = "text", opts = {}) => {
+    const { autoComplete, inputMode, label } = opts;
+    return (
+      <div style={{ marginTop: label ? 12 : 0 }}>
+        {label && <label htmlFor={`f-${k}`} style={{ display: "block", fontSize: 12.5, color: C.muted, marginBottom: -2 }}>{label}</label>}
+        <input
+          id={`f-${k}`} value={form[k]} onChange={set(k)} placeholder={ph} type={type}
+          aria-label={label || ph} autoComplete={autoComplete} inputMode={inputMode}
+          style={inputStyle}
+        />
+      </div>
+    );
+  };
 
   return (
     <div style={{ minHeight: "100vh", background: pageBg, display: "flex", flexDirection: "column",
@@ -161,9 +182,12 @@ function Auth({ onDone, initialMode = "login" }) {
         <p style={{ color: C.muted, fontSize: 15, marginTop: 4 }}>Settle up with anyone.</p>
 
         <div style={{ marginTop: 26 }}>
-          {mode === "register" && (<>{field("Full name", "name")}{field("Handle (e.g. @you)", "handle")}</>)}
-          {field("Email", "email", "email")}
-          {field("Password", "password", "password")}
+          {mode === "register" && (<>
+            {field("Full name", "name", "text", { autoComplete: "name" })}
+            {field("Handle (e.g. @you)", "handle", "text", { autoComplete: "username" })}
+          </>)}
+          {field("Email", "email", "email", { autoComplete: "email" })}
+          {field("Password", "password", "password", { autoComplete: mode === "register" ? "new-password" : "current-password" })}
 
           {mode === "register" && (<>
             <p style={{ fontSize: 12, color: C.muted, marginTop: 22, marginBottom: -2, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
@@ -172,14 +196,16 @@ function Auth({ onDone, initialMode = "login" }) {
             <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>
               Required to send and receive money — even's payment partner runs a one-time identity check.
             </p>
-            {field("Street address", "address1")}
-            {field("City", "city")}
+            {field("Street address", "address1", "text", { autoComplete: "street-address" })}
+            {field("City", "city", "text", { autoComplete: "address-level2" })}
             <div style={{ display: "flex", gap: 8 }}>
-              <div style={{ flex: 1 }}>{field("State (e.g. CA)", "state")}</div>
-              <div style={{ flex: 1 }}>{field("ZIP", "postalCode")}</div>
+              <div style={{ flex: 1 }}>{field("State (e.g. CA)", "state", "text", { autoComplete: "address-level1" })}</div>
+              <div style={{ flex: 1 }}>{field("ZIP", "postalCode", "text", { autoComplete: "postal-code", inputMode: "numeric" })}</div>
             </div>
-            {field("Date of birth", "dateOfBirth", "date")}
-            {field("Social Security Number", "ssn")}
+            {/* Needs a visible label — date inputs ignore placeholder, so this
+                would otherwise read as a bare mm/dd/yyyy. */}
+            {field("", "dateOfBirth", "date", { autoComplete: "bday", label: "Date of birth" })}
+            {field("000-00-0000", "ssn", "text", { inputMode: "numeric", label: "Social Security Number" })}
             <p style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Used once to verify your identity — never stored by even.</p>
           </>)}
 
@@ -430,7 +456,13 @@ function Wallet({ initialAuthMode = "login" }) {
           )}
 
           <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
-            <button onClick={() => start("pay")} style={{ ...bigBtn, background: C.brand, color: "#fff" }}>
+            {/* De-emphasized until sending is actually possible, so the visual
+                weight sits on the verification step rather than inviting a tap
+                that dead-ends. */}
+            <button onClick={() => start("pay")}
+              style={payEligible
+                ? { ...bigBtn, background: C.brand, color: "#fff" }
+                : { ...bigBtn, background: C.surface, color: C.muted, border: `1px solid ${C.line}` }}>
               <ArrowUpRight size={19} /> Pay
             </button>
             <button onClick={() => start("request")} style={{ ...bigBtn, background: C.surface, color: C.ink, border: `1px solid ${C.line}` }}>
