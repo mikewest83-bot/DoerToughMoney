@@ -42,6 +42,16 @@ const primaryBtn = { width: "100%", marginTop: 14, padding: 14, borderRadius: 14
 const iconBtn = { background: "none", border: "none", padding: 4, cursor: "pointer", color: C.ink };
 const sectionLabel = { fontSize: 11.5, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.07em", margin: 0 };
 
+// Carried by this module rather than relying on App.jsx's global block, so the
+// group screens style correctly wherever they're mounted. Horizontal card
+// strips scroll by touch/drag; the desktop track read as a stray gray bar.
+const groupStyles = (
+  <style>{`
+    .no-scrollbar{scrollbar-width:none;-ms-overflow-style:none}
+    .no-scrollbar::-webkit-scrollbar{display:none}
+  `}</style>
+);
+
 function Avatar({ name, size = 36, dim = false }) {
   return (
     <div style={{
@@ -120,30 +130,41 @@ export function ReminderBanners({ onOpenGroup }) {
 
   if (reminders.length === 0) return null;
 
+  // Cap what's shown: several tall banners buried the whole app behind them.
+  const MAX = 3;
+  const shown = reminders.slice(0, MAX);
+  const extra = reminders.length - shown.length;
+
   return (
-    <div style={{ padding: "12px 20px 0", display: "flex", flexDirection: "column", gap: 8 }}>
-      {reminders.map((r) => (
-        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "12px 14px", borderRadius: 16, background: C.brandSoft, border: `1px solid #D9D4FB` }}>
-          <div style={{ width: 30, height: 30, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
-            <Bell size={15} color="#fff" />
+    <div style={{ padding: "12px 20px 0", display: "flex", flexDirection: "column", gap: 7 }}>
+      {shown.map((r) => (
+        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 15, background: C.brandSoft, border: "1px solid #D9D4FB" }}>
+          <div style={{ width: 28, height: 28, borderRadius: 9, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Bell size={14} color="#fff" />
           </div>
+          {/* Single line so a stack of nudges stays compact. */}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <p style={{ margin: 0, fontSize: 13.5, fontWeight: 600, color: C.ink }}>
-              {r.fromName.split(" ")[0]} nudged you about <strong style={{ fontFamily: mono }}>${money(r.amount)}</strong>
+            <p style={{ margin: 0, fontSize: 13, fontWeight: 600, color: C.ink, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {r.fromName.split(" ")[0]} wants <span style={{ fontFamily: mono, fontWeight: 700 }}>${money(r.amount)}</span>
             </p>
-            <p style={{ margin: 0, fontSize: 12, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-              {r.note || r.groupName}
+            <p style={{ margin: 0, fontSize: 11.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {r.note ? `${r.note} · ${r.groupName}` : r.groupName}
             </p>
           </div>
           <button onClick={() => { dismiss(r.id); onOpenGroup(r.groupId); }}
-            style={{ border: "none", background: C.brand, color: "#fff", borderRadius: 10, padding: "7px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+            style={{ border: "none", background: C.brand, color: "#fff", borderRadius: 10, padding: "6px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
             Settle
           </button>
-          <button onClick={() => dismiss(r.id)} aria-label="Dismiss" style={{ ...iconBtn, color: C.muted, flexShrink: 0 }}>
-            <X size={16} />
+          <button onClick={() => dismiss(r.id)} aria-label="Dismiss" style={{ ...iconBtn, color: C.muted, flexShrink: 0, padding: 2 }}>
+            <X size={15} />
           </button>
         </div>
       ))}
+      {extra > 0 && (
+        <p style={{ margin: "2px 0 0", fontSize: 12, color: C.muted, textAlign: "center" }}>
+          +{extra} more {extra === 1 ? "request" : "requests"} in your groups
+        </p>
+      )}
     </div>
   );
 }
@@ -179,6 +200,7 @@ export function GroupsList({ onOpen }) {
 
   return (
     <section style={{ padding: "8px 20px 32px" }}>
+      {groupStyles}
       <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
         <div>
           <p style={sectionLabel}>Shared</p>
@@ -311,6 +333,7 @@ export function GroupDetail({ groupId, onBack, onUserChanged }) {
 
   return (
     <section style={{ padding: "8px 20px 32px" }}>
+      {groupStyles}
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         <button onClick={onBack} style={iconBtn}><ArrowLeft size={20} /></button>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -382,7 +405,9 @@ export function GroupDetail({ groupId, onBack, onUserChanged }) {
       {!group.implicit && (
         <div style={{ marginTop: 20 }}>
           <p style={sectionLabel}>Everyone</p>
-          <div style={{ display: "flex", gap: 8, marginTop: 8, overflowX: "auto", paddingBottom: 4 }}>
+          {/* noScrollbar hides the desktop scrollbar track; touch devices never
+              showed one and it read as a stray gray bar. */}
+          <div className="no-scrollbar" style={{ display: "flex", gap: 8, marginTop: 8, overflowX: "auto", paddingBottom: 2 }}>
             {group.members.map((m) => (
               <div key={m.id} style={{
                 flexShrink: 0, width: 108, padding: "13px 11px", borderRadius: 16,
@@ -495,34 +520,38 @@ function OwedRow({ group, t, onUpdated }) {
 
   return (
     <div style={{ padding: "11px 13px", borderRadius: 16, background: C.surface, border: `1px solid ${C.line}` }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+      {/* One line regardless of name length: the name truncates, and the amount
+          and action never shrink. Long names used to wrap and make rows
+          uneven heights. */}
+      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
         <Avatar name={t.fromName} size={32} dim={!t.joined} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600 }}>{t.fromName}</p>
-          {!t.joined && <p style={{ margin: 0, fontSize: 11.5, color: C.amber, fontWeight: 600 }}>Hasn't joined yet</p>}
+          <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+            {t.fromName}
+          </p>
+          <p style={{ margin: 0, fontSize: 11.5, color: !t.joined ? C.amber : C.muted, fontWeight: !t.joined ? 600 : 400, whiteSpace: "nowrap" }}>
+            {!t.joined ? "Hasn't joined yet" : reminded ? `Nudged · again in ${t.remindHoursLeft}h` : " "}
+          </p>
         </div>
-        <span style={{ fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.green }}>${money(t.amount)}</span>
+        <span style={{ fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.green, flexShrink: 0 }}>${money(t.amount)}</span>
 
         {!t.joined ? (
           <button onClick={share}
-            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.canvas, color: C.ink, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.canvas, color: C.ink, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
             <Send size={12} /> {sent ? "Copied" : "Ask"}
           </button>
         ) : reminded || sent ? (
-          <span style={{ display: "flex", alignItems: "center", gap: 4, color: C.muted, fontSize: 12, fontWeight: 600, padding: "7px 4px" }}>
-            <Check size={13} /> Nudged
+          <span style={{ display: "flex", alignItems: "center", gap: 4, color: C.muted, fontSize: 12, fontWeight: 600, padding: "7px 2px", flexShrink: 0 }}>
+            <Check size={13} /> Sent
           </span>
         ) : (
           <button onClick={remind} disabled={busy}
-            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.brandSoft, color: C.brand, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
+            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.brandSoft, color: C.brand, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.5 : 1, flexShrink: 0 }}>
             <Bell size={12} /> Nudge
           </button>
         )}
       </div>
       {err && <p style={{ margin: "8px 0 0", fontSize: 12, color: C.red }}>{err}</p>}
-      {reminded && !err && (
-        <p style={{ margin: "6px 0 0", fontSize: 11.5, color: C.muted }}>You can nudge again in {t.remindHoursLeft}h.</p>
-      )}
     </div>
   );
 }
