@@ -31,6 +31,23 @@ enum TransferSpeed {
   EXPRESS
 }
 
+enum GroupType {
+  HOUSEHOLD
+  TRIP
+  TEAM
+  OTHER
+}
+
+enum SplitMode {
+  EQUAL
+  EXACT
+}
+
+enum RecurrenceInterval {
+  WEEKLY
+  MONTHLY
+}
+
 enum DisputeStatus {
   FILED
   INVESTIGATING
@@ -60,6 +77,8 @@ model User {
   sentRequests      Request[]  @relation("payer")
   receivedRequests  Request[]  @relation("requester")
   disputes          Dispute[]
+  groupMemberships  GroupMember[]
+  createdGroups     Group[]
 }
 
 // even's record of money movement. No in-app spendable balance — funds live
@@ -86,6 +105,7 @@ model Transfer {
   createdAt      DateTime       @default(now())
   updatedAt      DateTime       @updatedAt
   disputes       Dispute[]
+  settlement     Settlement?
 
   @@index([senderId])
   @@index([recipientId])
@@ -132,6 +152,137 @@ model Request {
 
   @@index([payerId])
   @@index([requesterId])
+}
+
+// ── shared expenses ──────────────────────────────────────
+// A household, trip, team, or an implicit 2-person pair. Debts here are tracked
+// data, not custody: even never holds the money. Balances are computed from
+// expenses and settlements (see groups.js) and squared up with a real transfer.
+model Group {
+  id          String    @id @default(cuid())
+  name        String
+  type        GroupType @default(HOUSEHOLD)
+  createdById String
+  createdBy   User      @relation(fields: [createdById], references: [id])
+  // True for the auto-created 2-person group behind a direct "split with Sam",
+  // so the UI can present it as a person rather than a named group.
+  implicit    Boolean   @default(false)
+  createdAt   DateTime  @default(now())
+
+  members    GroupMember[]
+  expenses   Expense[]
+  recurring  RecurringExpense[]
+  settlements Settlement[]
+
+  @@index([createdById])
+}
+
+// A member is either a real user, or a placeholder for someone invited by email
+// who hasn't signed up yet. Expenses reference members (not users) precisely so
+// a placeholder can hold a share before they have an account — that's what lets
+// a household start tracking immediately and pulls invitees in.
+model GroupMember {
+  id          String    @id @default(cuid())
+  groupId     String
+  group       Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  userId      String?
+  user        User?     @relation(fields: [userId], references: [id])
+  inviteEmail String?   // set while pending; matched on registration
+  inviteName  String?   // display name until they join
+  joinedAt    DateTime?
+  createdAt   DateTime  @default(now())
+
+  paidExpenses     Expense[]      @relation("paidBy")
+  shares           ExpenseShare[]
+  paidRecurring    RecurringExpense[] @relation("recurringPaidBy")
+  settlementsFrom  Settlement[]   @relation("settleFrom")
+  settlementsTo    Settlement[]   @relation("settleTo")
+
+  @@unique([groupId, userId])
+  @@unique([groupId, inviteEmail])
+  @@index([groupId])
+  @@index([userId])
+  @@index([inviteEmail])
+}
+
+model Expense {
+  id             String    @id @default(cuid())
+  groupId        String
+  group          Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paidByMemberId String
+  paidBy         GroupMember @relation("paidBy", fields: [paidByMemberId], references: [id])
+  amountCents    Int
+  description    String
+  splitMode      SplitMode @default(EQUAL)
+  incurredOn     DateTime  @default(now())
+  createdById    String
+  // Set when this row was materialized from a schedule, plus the period it
+  // covers — the unique constraint is what stops a re-run charging rent twice.
+  recurringExpenseId String?
+  recurringPeriod    String?
+  recurringExpense   RecurringExpense? @relation(fields: [recurringExpenseId], references: [id])
+  createdAt      DateTime  @default(now())
+
+  shares ExpenseShare[]
+
+  @@unique([recurringExpenseId, recurringPeriod])
+  @@index([groupId])
+  @@index([paidByMemberId])
+}
+
+model ExpenseShare {
+  id         String      @id @default(cuid())
+  expenseId  String
+  expense    Expense     @relation(fields: [expenseId], references: [id], onDelete: Cascade)
+  memberId   String
+  member     GroupMember @relation(fields: [memberId], references: [id])
+  shareCents Int
+
+  @@unique([expenseId, memberId])
+  @@index([memberId])
+}
+
+// Rent on the 1st, Netflix monthly. Materialized into Expense rows by the daily
+// job in recurring.js so nobody re-enters rent every month.
+model RecurringExpense {
+  id             String             @id @default(cuid())
+  groupId        String
+  group          Group              @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  paidByMemberId String
+  paidBy         GroupMember        @relation("recurringPaidBy", fields: [paidByMemberId], references: [id])
+  amountCents    Int
+  description    String
+  splitMode      SplitMode          @default(EQUAL)
+  interval       RecurrenceInterval
+  dayOfMonth     Int?               // MONTHLY, capped at 28 so February never skips
+  dayOfWeek      Int?               // WEEKLY, 0=Sunday
+  nextRunOn      DateTime
+  active         Boolean            @default(true)
+  createdAt      DateTime           @default(now())
+
+  expenses Expense[]
+
+  @@index([groupId])
+  @@index([active, nextRunOn])
+}
+
+// Either a real transfer through even, or a record that two people squared up in
+// cash. Both have to reduce the balance, which is why this isn't just a flag on
+// Transfer — cash settlements have no transfer at all.
+model Settlement {
+  id           String      @id @default(cuid())
+  groupId      String
+  group        Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromMemberId String
+  fromMember   GroupMember @relation("settleFrom", fields: [fromMemberId], references: [id])
+  toMemberId   String
+  toMember     GroupMember @relation("settleTo", fields: [toMemberId], references: [id])
+  amountCents  Int
+  transferId   String?     @unique
+  transfer     Transfer?   @relation(fields: [transferId], references: [id])
+  createdAt    DateTime    @default(now())
+
+  @@index([groupId])
 }
 
 // Makes mutating money endpoints safe to retry: a client sends an

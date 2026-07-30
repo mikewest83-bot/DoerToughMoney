@@ -8,27 +8,29 @@ import rateLimit from "express-rate-limit";
 
 import { register, login, verifyIdentity, authRequired, publicUser } from "./auth.js";
 import prisma, {
-  getUserById, getUserByHandle, searchUsers, feedForUser,
-  createTransferRecord, logRequest, newIdempotencyKey,
+  getUserById, getUserByHandle, searchUsers, feedForUser, logRequest,
   setFundingSource, setFundingSourceVerified, setKycStatusByCustomerUrlSuffix,
 } from "./db.js";
 import {
-  dwollaWebhook, checkVelocity, VelocityError, createTransfer,
-  addBankManual, initiateMicroDeposits, verifyMicroDeposits,
+  dwollaWebhook, addBankManual, initiateMicroDeposits, verifyMicroDeposits,
   startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
   fileDispute, makeCreditFlows, getFundingSourceChannels, supportsInstant,
   createExchangeSession, getSessionToken, createExchange, addBankViaExchange,
 } from "./dwolla/index.js";
 import { idempotency } from "./idempotency.js";
-import { validateAmount, shapeTxn, computeFee } from "./logic.js";
+import { validateAmount, shapeTxn } from "./logic.js";
 import {
   validateProductionConfig, feeParams, dwollaConfigured,
-  expediteFeeParams, expediteOffered, rtpEnabled, instantLinkEnabled,
+  expediteFeeParams, expediteOffered, instantLinkEnabled,
 } from "./config.js";
-
-// Instant delivery needs both the recipient's bank and our own Dwolla account
-// to support Real Time Payments.
-const canSendInstantly = (user) => rtpEnabled() && supportsInstant(user.fundingSourceChannels);
+import { sendMoney, PaymentError, transferBlockedReason, canSendInstantly } from "./payments.js";
+import {
+  getGroup, listGroupsForUser, memberFor, createGroup, addMember, removeMember,
+  addExpense, deleteExpense, recordSettlement, addRecurring, deactivateRecurring,
+  shapeGroup, findOrCreatePairGroup,
+} from "./groupsdb.js";
+import { MAX_DAY_OF_MONTH } from "./groups.js";
+import { startRecurringExpenseCron } from "./recurring.js";
 
 validateProductionConfig();
 
@@ -195,45 +197,254 @@ app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) =
 
   const recipient = await getUserByHandle(handle);
   if (!recipient) return res.status(404).json({ error: "No one with that handle." });
-  if (recipient.id === req.user.id) return res.status(400).json({ error: "You can't pay yourself." });
 
-  if (req.user.kycStatus !== "VERIFIED" || !req.user.fundingSourceVerified)
-    return res.status(403).json({ error: "Finish identity verification and link a bank before sending money." });
-  if (!recipient.fundingSourceVerified)
-    return res.status(400).json({ error: `${recipient.name} hasn't linked a verified bank account yet.` });
+  const result = await sendMoney({
+    sender: req.user, recipient, cents: v.cents, note, speed: requestedSpeed,
+  });
 
-  // Express is only honored when it's actually priced, so a misbehaving client
-  // can't get Same Day/Instant delivery (which costs us more) for free.
-  const speed = requestedSpeed === "EXPRESS" && expediteOffered() ? "EXPRESS" : "STANDARD";
-  const baseFeeCents = computeFee(v.cents, feeParams());
-  const expediteFeeCents = speed === "EXPRESS" ? computeFee(v.cents, expediteFeeParams()) : 0;
-  const feeCents = baseFeeCents + expediteFeeCents;
+  res.json({
+    user: publicUser(req.user),
+    feeCents: result.feeCents, expediteFeeCents: result.expediteFeeCents,
+    amountCents: v.cents, speed: result.speed, usedInstant: result.usedInstant,
+  });
+});
 
-  try {
-    await checkVelocity(prisma, { userId: req.user.id, amountCents: v.cents });
-  } catch (e) {
-    if (e instanceof VelocityError) return res.status(429).json({ error: "You've hit a sending limit. Try again later or with a smaller amount." });
-    throw e;
+// ── shared expenses ──────────────────────────────────────
+// Debts are tracked data, not custody. Tracking needs no verification at all;
+// only settling with real money does — so a household can start the day it
+// signs up and verify later.
+
+// Loads the group and asserts the caller belongs to it. Every group route goes
+// through this, so membership can't be forgotten on one endpoint.
+async function requireMembership(req, res) {
+  const group = await getGroup(req.params.id);
+  if (!group) { res.status(404).json({ error: "Group not found." }); return null; }
+  const me = memberFor(group, req.user.id);
+  if (!me) { res.status(403).json({ error: "You're not a member of that group." }); return null; }
+  return { group, me };
+}
+
+app.get("/api/groups", authRequired, async (req, res) => {
+  const groups = await listGroupsForUser(req.user.id);
+  res.json({ groups: groups.map((g) => shapeGroup(g, req.user.id)) });
+});
+
+app.post("/api/groups", authRequired, async (req, res) => {
+  const { name, type } = req.body || {};
+  const trimmed = String(name || "").trim();
+  if (trimmed.length < 2) return res.status(400).json({ error: "Give the group a name." });
+  const allowed = ["HOUSEHOLD", "TRIP", "TEAM", "OTHER"];
+  const group = await createGroup({
+    name: trimmed.slice(0, 60),
+    type: allowed.includes(type) ? type : "HOUSEHOLD",
+    createdById: req.user.id,
+  });
+  res.status(201).json({ group: shapeGroup(group, req.user.id) });
+});
+
+app.get("/api/groups/:id", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  res.json({ group: shapeGroup(ctx.group, req.user.id) });
+});
+
+// Add by handle (they're already on even) or by email (creates a placeholder
+// that holds their share until they sign up).
+app.post("/api/groups/:id/members", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  const { handle, email, name } = req.body || {};
+
+  if (handle) {
+    const user = await getUserByHandle(String(handle).startsWith("@") ? handle : `@${handle}`);
+    if (!user) return res.status(404).json({ error: "No one with that handle." });
+    if (memberFor(ctx.group, user.id)) return res.status(409).json({ error: `${user.name} is already in this group.` });
+    await addMember(ctx.group.id, { userId: user.id });
+  } else if (email) {
+    const normalized = String(email).trim().toLowerCase();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(normalized)) return res.status(400).json({ error: "Enter a valid email address." });
+    // If they already have an account, link them directly instead of leaving a
+    // placeholder they'd never be matched to.
+    const existing = await prisma.user.findUnique({ where: { email: normalized } });
+    if (existing) {
+      if (memberFor(ctx.group, existing.id)) return res.status(409).json({ error: `${existing.name} is already in this group.` });
+      await addMember(ctx.group.id, { userId: existing.id });
+    } else {
+      if (ctx.group.members.some((m) => m.inviteEmail === normalized)) return res.status(409).json({ error: "That person has already been invited." });
+      await addMember(ctx.group.id, { inviteEmail: normalized, inviteName: name });
+    }
+  } else {
+    return res.status(400).json({ error: "Provide a handle or an email address." });
   }
 
-  const { dwollaTransferUrl, dwollaTransferId, idempotencyKey, usedInstant } = await createTransfer({
-    sourceFundingSourceUrl: req.user.fundingSourceUrl,
-    destinationFundingSourceUrl: recipient.fundingSourceUrl,
-    amountCents: v.cents,
-    feeCents,
-    feeChargeToCustomerUrl: feeCents > 0 ? req.user.dwollaCustomerUrl : undefined,
-    idempotencyKey: newIdempotencyKey(),
-    speed,
-    destinationSupportsInstant: canSendInstantly(recipient),
+  res.status(201).json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+app.delete("/api/groups/:id/members/:memberId", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  if (!ctx.group.members.some((m) => m.id === req.params.memberId))
+    return res.status(404).json({ error: "That person isn't in this group." });
+
+  const result = await removeMember(ctx.group.id, req.params.memberId);
+  if (!result.removed) return res.status(409).json({ error: result.reason });
+  res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+app.post("/api/groups/:id/expenses", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  const { amount, description, paidByMemberId, splitMode, shares, splitMemberIds, incurredOn } = req.body || {};
+
+  const v = validateAmount(amount);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const desc = String(description || "").trim();
+  if (!desc) return res.status(400).json({ error: "What was the expense for?" });
+
+  const memberIds = ctx.group.members.map((m) => m.id);
+  const payer = paidByMemberId || ctx.me.id;
+  if (!memberIds.includes(payer)) return res.status(400).json({ error: "Whoever paid must be in the group." });
+
+  // Default to splitting across everyone; allow a subset (not everyone shares
+  // every expense) but only members of this group.
+  const splitAcross = Array.isArray(splitMemberIds) && splitMemberIds.length ? splitMemberIds : memberIds;
+  if (splitAcross.some((id) => !memberIds.includes(id)))
+    return res.status(400).json({ error: "Can only split between members of this group." });
+  if (splitMode === "EXACT" && (!Array.isArray(shares) || shares.some((s) => !memberIds.includes(s.memberId))))
+    return res.status(400).json({ error: "Can only split between members of this group." });
+
+  const result = await addExpense({
+    groupId: ctx.group.id, paidByMemberId: payer, amountCents: v.cents,
+    description: desc.slice(0, 140), splitMode, splitMemberIds: splitAcross,
+    shares: splitMode === "EXACT" ? shares.map((s) => ({ memberId: s.memberId, shareCents: Math.round(Number(s.amount) * 100) })) : undefined,
+    createdById: req.user.id, incurredOn,
+  });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  res.status(201).json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+app.delete("/api/groups/:id/expenses/:expenseId", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  if (!ctx.group.expenses.some((e) => e.id === req.params.expenseId))
+    return res.status(404).json({ error: "Expense not found in this group." });
+  await deleteExpense(req.params.expenseId);
+  res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+// Rent, utilities, subscriptions — so nobody re-enters them monthly.
+app.post("/api/groups/:id/recurring", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  const { amount, description, paidByMemberId, interval, dayOfMonth, dayOfWeek } = req.body || {};
+
+  const v = validateAmount(amount);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const desc = String(description || "").trim();
+  if (!desc) return res.status(400).json({ error: "What is this recurring charge for?" });
+  if (!["WEEKLY", "MONTHLY"].includes(interval)) return res.status(400).json({ error: "Choose weekly or monthly." });
+
+  const payer = paidByMemberId || ctx.me.id;
+  if (!ctx.group.members.some((m) => m.id === payer)) return res.status(400).json({ error: "Whoever pays must be in the group." });
+
+  await addRecurring({
+    groupId: ctx.group.id, paidByMemberId: payer, amountCents: v.cents,
+    description: desc.slice(0, 140), interval,
+    // Capped so "the 31st" still fires in February rather than silently skipping.
+    dayOfMonth: interval === "MONTHLY" ? Math.min(Math.max(Number(dayOfMonth) || 1, 1), MAX_DAY_OF_MONTH) : null,
+    dayOfWeek: interval === "WEEKLY" ? Math.min(Math.max(Number(dayOfWeek) || 0, 0), 6) : null,
+  });
+  res.status(201).json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+app.delete("/api/groups/:id/recurring/:recurringId", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  if (!ctx.group.recurring.some((r) => r.id === req.params.recurringId))
+    return res.status(404).json({ error: "Recurring expense not found in this group." });
+  await deactivateRecurring(req.params.recurringId);
+  res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
+});
+
+// Square up. A real bank transfer when both sides are verified, otherwise a
+// record that they settled in cash — the ledger stays usable either way.
+app.post("/api/groups/:id/settle", authRequired, moneyLimiter, idempotency, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  const { toMemberId, amount, method = "transfer", speed } = req.body || {};
+
+  const v = validateAmount(amount);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const target = ctx.group.members.find((m) => m.id === toMemberId);
+  if (!target) return res.status(404).json({ error: "That person isn't in this group." });
+  if (target.id === ctx.me.id) return res.status(400).json({ error: "You can't settle with yourself." });
+
+  if (method === "cash") {
+    await recordSettlement({ groupId: ctx.group.id, fromMemberId: ctx.me.id, toMemberId: target.id, amountCents: v.cents });
+    return res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id), settledInCash: true });
+  }
+
+  if (!target.userId) return res.status(400).json({ error: `${target.inviteName || "They"} hasn't joined even yet — record it as cash for now.` });
+  const recipient = await getUserById(target.userId);
+  const blocked = transferBlockedReason(req.user, recipient);
+  if (blocked) return res.status(400).json({ error: `${blocked} You can record this as settled in cash instead.` });
+
+  // Settling a shared expense is moving money you already owe, so the platform
+  // fee doesn't apply — only the optional express upgrade the payer chose.
+  const result = await sendMoney({
+    sender: req.user, recipient, cents: v.cents,
+    note: `Settled up — ${ctx.group.name}`, speed, chargeFees: false,
+  });
+  await recordSettlement({
+    groupId: ctx.group.id, fromMemberId: ctx.me.id, toMemberId: target.id,
+    amountCents: v.cents, transferId: result.transfer.id,
   });
 
-  await createTransferRecord({
-    idempotencyKey, providerRef: dwollaTransferId, providerUrl: dwollaTransferUrl,
-    senderId: req.user.id, recipientId: recipient.id,
-    amountCents: v.cents, feeCents, expediteFeeCents, speed, note,
+  res.json({
+    group: shapeGroup(await getGroup(ctx.group.id), req.user.id),
+    expediteFeeCents: result.expediteFeeCents, speed: result.speed, usedInstant: result.usedInstant,
   });
+});
 
-  res.json({ user: publicUser(req.user), feeCents, expediteFeeCents, amountCents: v.cents, speed, usedInstant });
+// Quick 1:1 "I covered this, you owe me half" — no group setup required. Runs
+// on the same engine via an implicit pair group, so the debt shows up in the
+// same balances and settles the same way.
+app.post("/api/split", authRequired, async (req, res) => {
+  const { handle, amount, description, theirShare } = req.body || {};
+  const v = validateAmount(amount);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+  const desc = String(description || "").trim();
+  if (!desc) return res.status(400).json({ error: "What was it for?" });
+
+  const other = await getUserByHandle(String(handle || "").startsWith("@") ? handle : `@${handle}`);
+  if (!other) return res.status(404).json({ error: "No one with that handle." });
+  if (other.id === req.user.id) return res.status(400).json({ error: "You can't split with yourself." });
+
+  const group = await findOrCreatePairGroup(req.user, other);
+  const mine = memberFor(group, req.user.id);
+  const theirs = memberFor(group, other.id);
+
+  // Default to an even split; theirShare lets the caller say "you owe all of it"
+  // or any other amount.
+  let shares;
+  if (theirShare !== undefined && theirShare !== null && theirShare !== "") {
+    const t = validateAmount(theirShare);
+    if (!t.ok) return res.status(400).json({ error: t.error });
+    if (t.cents > v.cents) return res.status(400).json({ error: "Their share can't exceed the total." });
+    shares = [{ memberId: theirs.id, shareCents: t.cents }, { memberId: mine.id, shareCents: v.cents - t.cents }];
+  }
+
+  const result = await addExpense({
+    groupId: group.id, paidByMemberId: mine.id, amountCents: v.cents,
+    description: desc.slice(0, 140),
+    splitMode: shares ? "EXACT" : "EQUAL",
+    splitMemberIds: [mine.id, theirs.id], shares,
+    createdById: req.user.id,
+  });
+  if (!result.ok) return res.status(400).json({ error: result.error });
+
+  res.status(201).json({ group: shapeGroup(await getGroup(group.id), req.user.id) });
 });
 
 // ── disputes (Reg E) ─────────────────────────────────────
@@ -304,8 +515,13 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 
 // Anything a route throws lands here as clean JSON instead of a hung request.
 app.use((err, _req, res, _next) => {
-  console.error(err);
   if (res.headersSent) return;
+  // Expected refusals (not enough verification, over a limit) carry their own
+  // status and a message meant for the user; only log the unexpected ones.
+  if (err instanceof PaymentError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+  console.error(err);
   res.status(500).json({ error: "Something went wrong on our end. Please try again." });
 });
 
@@ -315,6 +531,11 @@ app.use((err, _req, res, _next) => {
 // or every replica will run the same sweep concurrently.
 function startBackgroundJobs() {
   if (process.env.DISABLE_CRONS) return;
+
+  // Recurring shared expenses need no Dwolla involvement — they're bookkeeping,
+  // so this runs even when payments aren't configured.
+  startRecurringExpenseCron();
+
   if (!dwollaConfigured()) {
     console.warn("[jobs] Dwolla not configured — reconciliation and dispute sweeps are disabled.");
     return;
@@ -351,7 +572,7 @@ function startBackgroundJobs() {
     },
   });
 
-  console.log("[jobs] reconciliation + Reg E deadline sweeps scheduled");
+  console.log("[jobs] recurring expenses + reconciliation + Reg E deadline sweeps scheduled");
 }
 
 const PORT = process.env.PORT || 4000;

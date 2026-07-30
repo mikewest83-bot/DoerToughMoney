@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { api, setToken, hasToken } from "./api.js";
+import { GroupsList, GroupDetail } from "./Groups.jsx";
 
 const C = {
   ink: "#16151A", canvas: "#F1F1F5", surface: "#FFFFFF",
@@ -217,6 +218,8 @@ function Wallet({ initialAuthMode = "login" }) {
     instantLinkEnabled: false,
   });
   const [speed, setSpeed] = useState("STANDARD");
+  const [tab, setTab] = useState("activity");
+  const [openGroupId, setOpenGroupId] = useState(null);
 
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState("who");
@@ -436,6 +439,27 @@ function Wallet({ initialAuthMode = "login" }) {
           </div>
         </section>
 
+        {/* Activity vs shared expenses. Groups get equal billing with the
+            payment feed because that's the reason to be here. */}
+        <div style={{ display: "flex", gap: 6, padding: "18px 20px 0" }}>
+          {[{ k: "activity", l: "Activity" }, { k: "shared", l: "Shared" }].map((t) => (
+            <button key={t.k} onClick={() => { setTab(t.k); setOpenGroupId(null); }}
+              style={{
+                flex: 1, padding: "9px 0", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer",
+                border: `1.5px solid ${tab === t.k ? C.brand : C.line}`,
+                background: tab === t.k ? C.brandSoft : C.surface,
+                color: tab === t.k ? C.brand : C.ink,
+              }}>{t.l}</button>
+          ))}
+        </div>
+
+        {tab === "shared" && (
+          openGroupId
+            ? <GroupDetail groupId={openGroupId} onBack={() => setOpenGroupId(null)} onUserChanged={refresh} />
+            : <GroupsList onOpen={setOpenGroupId} />
+        )}
+
+        {tab === "activity" && (
         <section style={{ padding: "24px 20px 32px" }}>
           <h2 style={{ fontSize: 13, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em", margin: 0 }}>Activity</h2>
           <div style={{ marginTop: 8 }}>
@@ -465,6 +489,7 @@ function Wallet({ initialAuthMode = "login" }) {
             })}
           </div>
         </section>
+        )}
 
         {txnSheet && (() => {
           const d = disputeFor(txnSheet.id);

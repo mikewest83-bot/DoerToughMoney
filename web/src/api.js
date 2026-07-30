@@ -43,6 +43,20 @@ export const api = {
   verifyIdentity: (b) => req("/api/verify-identity", { method: "POST", body: b }),
   fileDispute: (b) => req("/api/disputes", { method: "POST", body: b, idempotent: true }),
   disputes: () => req("/api/disputes"),
+
+  // ── shared expenses ──
+  groups: () => req("/api/groups"),
+  group: (id) => req(`/api/groups/${encodeURIComponent(id)}`),
+  createGroup: (b) => req("/api/groups", { method: "POST", body: b }),
+  addGroupMember: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/members`, { method: "POST", body: b }),
+  removeGroupMember: (id, memberId) => req(`/api/groups/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
+  addExpense: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/expenses`, { method: "POST", body: b }),
+  deleteExpense: (id, expenseId) => req(`/api/groups/${encodeURIComponent(id)}/expenses/${encodeURIComponent(expenseId)}`, { method: "DELETE" }),
+  addRecurring: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/recurring`, { method: "POST", body: b }),
+  deleteRecurring: (id, rid) => req(`/api/groups/${encodeURIComponent(id)}/recurring/${encodeURIComponent(rid)}`, { method: "DELETE" }),
+  // Moves money — idempotent so a double-tap can't settle twice.
+  settle: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/settle`, { method: "POST", body: b, idempotent: true }),
+  quickSplit: (b) => req("/api/split", { method: "POST", body: b }),
   bankLinkStart: () => req("/api/bank/link/start", { method: "POST" }),
   bankLinkComplete: (b) => req("/api/bank/link/complete", { method: "POST", body: b, idempotent: true }),
   bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),

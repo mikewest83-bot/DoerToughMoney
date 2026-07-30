@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { createUser, getUserByEmail, getUserByHandle, getUserById, setDwollaCustomer } from "./db.js";
+import { claimInvites } from "./groupsdb.js";
 import { cleanHandle } from "./logic.js";
 import { createVerifiedCustomer, getCustomerStatus } from "./dwolla/index.js";
 
@@ -74,8 +75,19 @@ export async function register(req, res) {
   const password_hash = await bcrypt.hash(password, 12);
   const user = await createUser({ name: String(name).trim(), handle: h, email: normalizedEmail, password_hash });
   await setDwollaCustomer(user.id, { dwollaCustomerUrl, kycStatus });
+
+  // Link any group invites waiting on this email so the new user lands straight
+  // in their household already seeing what they owe. Never block registration
+  // on this — a failure here shouldn't cost us the account.
+  let joinedGroups = 0;
+  try {
+    joinedGroups = await claimInvites(user.id, normalizedEmail);
+  } catch (e) {
+    console.error("[groups] failed to claim invites for new user:", e);
+  }
+
   const withDwolla = await getUserById(user.id);
-  res.json({ token: sign(withDwolla), user: publicUser(withDwolla) });
+  res.json({ token: sign(withDwolla), user: publicUser(withDwolla), joinedGroups });
 }
 
 // Complete identity verification for an account created before the Dwolla
