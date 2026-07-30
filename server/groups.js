@@ -160,3 +160,32 @@ export function nextOccurrence(from, { interval, dayOfMonth, dayOfWeek }) {
 export function periodKey(recurringExpenseId, date) {
   return `${recurringExpenseId}:${new Date(date).toISOString().slice(0, 10)}`;
 }
+
+// ── reminders ────────────────────────────────────────────
+// A reminder pokes someone who owes you. The cooldown is the whole safety
+// mechanism: without it this is a nagging tool, and being able to spam someone
+// through a payments app is worse than not having the feature.
+export const REMIND_COOLDOWN_HOURS = 24;
+
+/**
+ * May this person send another reminder yet?
+ * @param lastSentAt  when they last reminded this same person in this group, or null
+ * @returns {{ok: true} | {ok: false, hoursLeft: number}}
+ */
+export function canRemind(lastSentAt, now = new Date(), cooldownHours = REMIND_COOLDOWN_HOURS) {
+  if (!lastSentAt) return { ok: true };
+  const elapsedMs = new Date(now).getTime() - new Date(lastSentAt).getTime();
+  const cooldownMs = cooldownHours * 3600_000;
+  if (elapsedMs >= cooldownMs) return { ok: true };
+  // Round up so "1 hour left" never displays while 10 minutes remain.
+  return { ok: false, hoursLeft: Math.ceil((cooldownMs - elapsedMs) / 3600_000) };
+}
+
+/**
+ * Reminders are only legitimate from a creditor to a debtor. Checking against
+ * the simplified transfer list means you can't remind someone the ledger says
+ * owes you nothing.
+ */
+export function isOwedBy(transfers, creditorMemberId, debtorMemberId) {
+  return transfers.some((t) => t.toMemberId === creditorMemberId && t.fromMemberId === debtorMemberId);
+}

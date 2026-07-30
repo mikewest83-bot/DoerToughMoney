@@ -173,6 +173,7 @@ model Group {
   expenses   Expense[]
   recurring  RecurringExpense[]
   settlements Settlement[]
+  reminders   Reminder[]
 
   @@index([createdById])
 }
@@ -197,6 +198,8 @@ model GroupMember {
   paidRecurring    RecurringExpense[] @relation("recurringPaidBy")
   settlementsFrom  Settlement[]   @relation("settleFrom")
   settlementsTo    Settlement[]   @relation("settleTo")
+  remindersSent     Reminder[]    @relation("remindFrom")
+  remindersReceived Reminder[]    @relation("remindTo")
 
   @@unique([groupId, userId])
   @@unique([groupId, inviteEmail])
@@ -283,6 +286,29 @@ model Settlement {
   createdAt    DateTime    @default(now())
 
   @@index([groupId])
+}
+
+// A nudge from someone who is owed money to the person who owes it. Delivered
+// in-app only — even sends nothing outbound on a user's behalf. amountCents is
+// snapshotted at send time so the reminder still reads truthfully later, even
+// after the underlying balance moves.
+model Reminder {
+  id           String      @id @default(cuid())
+  groupId      String
+  group        Group       @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  fromMemberId String
+  fromMember   GroupMember @relation("remindFrom", fields: [fromMemberId], references: [id])
+  toMemberId   String
+  toMember     GroupMember @relation("remindTo", fields: [toMemberId], references: [id])
+  amountCents  Int
+  note         String?
+  seenAt       DateTime?
+  createdAt    DateTime    @default(now())
+
+  @@index([groupId])
+  // Serves both "what's waiting for me" and the cooldown lookup.
+  @@index([toMemberId, createdAt])
+  @@index([fromMemberId, toMemberId, createdAt])
 }
 
 // Makes mutating money endpoints safe to retry: a client sends an

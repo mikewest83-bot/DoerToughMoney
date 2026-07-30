@@ -57,6 +57,9 @@ export const api = {
   // Moves money — idempotent so a double-tap can't settle twice.
   settle: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/settle`, { method: "POST", body: b, idempotent: true }),
   quickSplit: (b) => req("/api/split", { method: "POST", body: b }),
+  remind: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/remind`, { method: "POST", body: b }),
+  reminders: () => req("/api/reminders"),
+  dismissReminder: (id) => req(`/api/reminders/${encodeURIComponent(id)}/seen`, { method: "POST" }),
   bankLinkStart: () => req("/api/bank/link/start", { method: "POST" }),
   bankLinkComplete: (b) => req("/api/bank/link/complete", { method: "POST", body: b, idempotent: true }),
   bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),

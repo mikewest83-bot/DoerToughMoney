@@ -28,6 +28,7 @@ import {
   getGroup, listGroupsForUser, memberFor, createGroup, addMember, removeMember,
   addExpense, deleteExpense, recordSettlement, addRecurring, deactivateRecurring,
   shapeGroup, findOrCreatePairGroup,
+  sendReminder, remindersForUser, markReminderSeen, lastRemindedMap,
 } from "./groupsdb.js";
 import { MAX_DAY_OF_MONTH } from "./groups.js";
 import { startRecurringExpenseCron } from "./recurring.js";
@@ -245,7 +246,9 @@ app.post("/api/groups", authRequired, async (req, res) => {
 app.get("/api/groups/:id", authRequired, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
-  res.json({ group: shapeGroup(ctx.group, req.user.id) });
+  // Cooldown state so the UI can show "Reminded" instead of a button that fails.
+  const lastReminded = await lastRemindedMap(ctx.me.id);
+  res.json({ group: shapeGroup(ctx.group, req.user.id, { lastReminded }) });
 });
 
 // Add by handle (they're already on even) or by email (creates a placeholder
@@ -405,6 +408,33 @@ app.post("/api/groups/:id/settle", authRequired, moneyLimiter, idempotency, asyn
     group: shapeGroup(await getGroup(ctx.group.id), req.user.id),
     expediteFeeCents: result.expediteFeeCents, speed: result.speed, usedInstant: result.usedInstant,
   });
+});
+
+// ── reminders ────────────────────────────────────────────
+// Nudging is in-app only: even sends nothing outbound on a user's behalf. The
+// cooldown in groups.js is what keeps this from becoming a harassment tool.
+app.post("/api/groups/:id/remind", authRequired, async (req, res) => {
+  const ctx = await requireMembership(req, res);
+  if (!ctx) return;
+  const { toMemberId, note } = req.body || {};
+  if (!toMemberId) return res.status(400).json({ error: "Who do you want to remind?" });
+
+  const result = await sendReminder({ group: ctx.group, fromMemberId: ctx.me.id, toMemberId, note });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  const group = await getGroup(ctx.group.id);
+  res.status(201).json({ group: shapeGroup(group, req.user.id, { lastReminded: await lastRemindedMap(ctx.me.id) }) });
+});
+
+// What's waiting for me, so a nudge actually surfaces on the other side.
+app.get("/api/reminders", authRequired, async (req, res) => {
+  res.json({ reminders: await remindersForUser(req.user.id) });
+});
+
+app.post("/api/reminders/:reminderId/seen", authRequired, async (req, res) => {
+  const result = await markReminderSeen(req.params.reminderId, req.user.id);
+  if (!result.ok) return res.status(404).json({ error: "Reminder not found." });
+  res.json({ ok: true });
 });
 
 // Quick 1:1 "I covered this, you owe me half" — no group setup required. Runs

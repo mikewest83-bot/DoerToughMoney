@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { api, setToken, hasToken } from "./api.js";
-import { GroupsList, GroupDetail } from "./Groups.jsx";
+import { GroupsList, GroupDetail, ReminderBanners } from "./Groups.jsx";
 
 const C = {
   ink: "#16151A", canvas: "#F1F1F5", surface: "#FFFFFF",
@@ -438,6 +438,9 @@ function Wallet({ initialAuthMode = "login" }) {
             </button>
           </div>
         </section>
+
+        {/* Someone asking to be paid outranks everything else on the screen. */}
+        <ReminderBanners onOpenGroup={(id) => { setTab("shared"); setOpenGroupId(id); }} />
 
         {/* Activity vs shared expenses. Groups get equal billing with the
             payment feed because that's the reason to be here. */}

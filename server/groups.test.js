@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   splitEqual, validateShares, computeNetBalances, simplifyDebts,
   memberSummary, nextOccurrence, periodKey, MAX_DAY_OF_MONTH,
+  canRemind, isOwedBy, REMIND_COOLDOWN_HOURS,
 } from "./groups.js";
 
 const sum = (xs, f) => xs.reduce((t, x) => t + f(x), 0);
@@ -200,5 +201,62 @@ describe("periodKey", () => {
   it("differs across periods and schedules", () => {
     expect(periodKey("r1", "2026-03-01")).not.toBe(periodKey("r1", "2026-04-01"));
     expect(periodKey("r1", "2026-03-01")).not.toBe(periodKey("r2", "2026-03-01"));
+  });
+});
+
+// The cooldown is what stops reminders becoming a harassment tool, so it gets
+// the same scrutiny as the money math.
+describe("canRemind cooldown", () => {
+  const now = new Date("2026-07-29T12:00:00Z");
+
+  it("allows a first reminder", () => {
+    expect(canRemind(null, now)).toEqual({ ok: true });
+  });
+
+  it("blocks a second reminder inside the window", () => {
+    const r = canRemind(new Date("2026-07-29T10:00:00Z"), now);
+    expect(r.ok).toBe(false);
+    expect(r.hoursLeft).toBe(22);
+  });
+
+  it("allows again exactly at the boundary", () => {
+    expect(canRemind(new Date("2026-07-28T12:00:00Z"), now).ok).toBe(true);
+  });
+
+  it("blocks one minute short of the boundary", () => {
+    expect(canRemind(new Date("2026-07-28T12:01:00Z"), now).ok).toBe(false);
+  });
+
+  it("rounds hoursLeft up, so it never claims less time than remains", () => {
+    // 10 minutes elapsed of a 24h window -> 23h50m left, reported as 24.
+    expect(canRemind(new Date("2026-07-29T11:50:00Z"), now).hoursLeft).toBe(24);
+  });
+
+  it("defaults to a 24 hour window", () => {
+    expect(REMIND_COOLDOWN_HOURS).toBe(24);
+  });
+});
+
+describe("isOwedBy", () => {
+  const transfers = [
+    { fromMemberId: "b", toMemberId: "a", amountCents: 1000 },
+    { fromMemberId: "c", toMemberId: "a", amountCents: 500 },
+  ];
+
+  it("confirms a creditor may remind someone who owes them", () => {
+    expect(isOwedBy(transfers, "a", "b")).toBe(true);
+    expect(isOwedBy(transfers, "a", "c")).toBe(true);
+  });
+
+  it("refuses the reverse direction — a debtor can't 'remind' their creditor", () => {
+    expect(isOwedBy(transfers, "b", "a")).toBe(false);
+  });
+
+  it("refuses when the two aren't settled against each other at all", () => {
+    expect(isOwedBy(transfers, "b", "c")).toBe(false);
+  });
+
+  it("refuses when nobody owes anything", () => {
+    expect(isOwedBy([], "a", "b")).toBe(false);
   });
 });

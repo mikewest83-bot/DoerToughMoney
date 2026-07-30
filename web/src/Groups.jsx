@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Plus, X, Users, ArrowLeft, Check, Repeat, Trash2, UserPlus, Wallet, ArrowRight,
+  Bell, Send,
 } from "lucide-react";
 import { api } from "./api.js";
 
@@ -97,6 +98,52 @@ function Sheet({ title, onClose, children }) {
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+// ── incoming nudges ──────────────────────────────────────
+// Shown at the top of the app, because a reminder nobody sees is not a feature.
+// Tapping it goes straight to the group so settling is one step away.
+export function ReminderBanners({ onOpenGroup }) {
+  const [reminders, setReminders] = useState([]);
+
+  const load = useCallback(async () => {
+    try { setReminders((await api.reminders()).reminders); } catch {}
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  const dismiss = async (id) => {
+    setReminders((rs) => rs.filter((r) => r.id !== id)); // optimistic
+    try { await api.dismissReminder(id); } catch { load(); }
+  };
+
+  if (reminders.length === 0) return null;
+
+  return (
+    <div style={{ padding: "12px 20px 0", display: "flex", flexDirection: "column", gap: 8 }}>
+      {reminders.map((r) => (
+        <div key={r.id} style={{ display: "flex", alignItems: "center", gap: 11, padding: "12px 14px", borderRadius: 16, background: C.brandSoft, border: `1px solid #D9D4FB` }}>
+          <div style={{ width: 30, height: 30, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <Bell size={15} color="#fff" />
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <p style={{ margin: 0, fontSize: 13.5, fontWeight: 600, color: C.ink }}>
+              {r.fromName.split(" ")[0]} nudged you about <strong style={{ fontFamily: mono }}>${money(r.amount)}</strong>
+            </p>
+            <p style={{ margin: 0, fontSize: 12, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {r.note || r.groupName}
+            </p>
+          </div>
+          <button onClick={() => { dismiss(r.id); onOpenGroup(r.groupId); }}
+            style={{ border: "none", background: C.brand, color: "#fff", borderRadius: 10, padding: "7px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0 }}>
+            Settle
+          </button>
+          <button onClick={() => dismiss(r.id)} aria-label="Dismiss" style={{ ...iconBtn, color: C.muted, flexShrink: 0 }}>
+            <X size={16} />
+          </button>
+        </div>
+      ))}
     </div>
   );
 }
@@ -295,11 +342,6 @@ export function GroupDetail({ groupId, onBack, onUserChanged }) {
             Settle ${money(topDebt.amount)} with {topDebt.toName.split(" ")[0]} <ArrowRight size={16} />
           </button>
         )}
-        {owed && group.owedToMe.length > 0 && (
-          <p style={{ margin: "14px 0 0", fontSize: 12.5, color: "#B9B9C6" }}>
-            From {group.owedToMe.map((t) => t.fromName.split(" ")[0]).join(", ")}
-          </p>
-        )}
       </div>
 
       {/* Any remaining debts beyond the one promoted into the hero. */}
@@ -317,6 +359,19 @@ export function GroupDetail({ groupId, onBack, onUserChanged }) {
                   Settle
                 </button>
               </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* People who owe you, with a nudge for each. This is the half of the
+          product that turns "tracked" into "actually paid". */}
+      {group.owedToMe.length > 0 && (
+        <div style={{ marginTop: 18 }}>
+          <p style={sectionLabel}>Owed to you</p>
+          <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 8 }}>
+            {group.owedToMe.map((t) => (
+              <OwedRow key={t.fromMemberId} group={group} t={t} onUpdated={setGroup} />
             ))}
           </div>
         </div>
@@ -408,6 +463,67 @@ export function GroupDetail({ groupId, onBack, onUserChanged }) {
           onSettled={(g) => { setGroup(g); setSheet(null); onUserChanged?.(); }} />
       )}
     </section>
+  );
+}
+
+// One person who owes you, plus the nudge. Three states: send a nudge, already
+// nudged (cooldown), or share a message because they haven't joined yet.
+function OwedRow({ group, t, onUpdated }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [sent, setSent] = useState(false);
+
+  const remind = async () => {
+    setBusy(true); setErr("");
+    try {
+      onUpdated((await api.remind(group.id, { toMemberId: t.fromMemberId })).group);
+      setSent(true);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  // They aren't on even, so there's no in-app inbox to nudge. Hand the user
+  // text to send themselves rather than emailing on their behalf.
+  const share = async () => {
+    const text = `Hey ${t.fromName.split(" ")[0]} — you owe me $${money(t.amount)} for ${group.name}. You can settle up on even: ${location.origin}/signup`;
+    try {
+      if (navigator.share) await navigator.share({ text });
+      else { await navigator.clipboard.writeText(text); setSent(true); }
+    } catch { /* user dismissed the share sheet */ }
+  };
+
+  const reminded = !t.canRemind && t.joined && t.remindHoursLeft > 0;
+
+  return (
+    <div style={{ padding: "11px 13px", borderRadius: 16, background: C.surface, border: `1px solid ${C.line}` }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 11 }}>
+        <Avatar name={t.fromName} size={32} dim={!t.joined} />
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600 }}>{t.fromName}</p>
+          {!t.joined && <p style={{ margin: 0, fontSize: 11.5, color: C.amber, fontWeight: 600 }}>Hasn't joined yet</p>}
+        </div>
+        <span style={{ fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.green }}>${money(t.amount)}</span>
+
+        {!t.joined ? (
+          <button onClick={share}
+            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.canvas, color: C.ink, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+            <Send size={12} /> {sent ? "Copied" : "Ask"}
+          </button>
+        ) : reminded || sent ? (
+          <span style={{ display: "flex", alignItems: "center", gap: 4, color: C.muted, fontSize: 12, fontWeight: 600, padding: "7px 4px" }}>
+            <Check size={13} /> Nudged
+          </span>
+        ) : (
+          <button onClick={remind} disabled={busy}
+            style={{ display: "flex", alignItems: "center", gap: 5, border: "none", background: C.brandSoft, color: C.brand, borderRadius: 10, padding: "7px 10px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
+            <Bell size={12} /> Nudge
+          </button>
+        )}
+      </div>
+      {err && <p style={{ margin: "8px 0 0", fontSize: 12, color: C.red }}>{err}</p>}
+      {reminded && !err && (
+        <p style={{ margin: "6px 0 0", fontSize: 11.5, color: C.muted }}>You can nudge again in {t.remindHoursLeft}h.</p>
+      )}
+    </div>
   );
 }
 
