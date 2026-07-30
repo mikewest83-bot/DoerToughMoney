@@ -3,7 +3,7 @@
 import prisma from "./db.js";
 import {
   splitEqual, validateShares, computeNetBalances, simplifyDebts, nextOccurrence, periodKey,
-  canRemind, isOwedBy,
+  canRemind, isOwedBy, REMIND_COOLDOWN_HOURS,
 } from "./groups.js";
 
 // Everything needed to compute balances and render a group in one round trip.
@@ -285,9 +285,12 @@ export async function markReminderSeen(reminderId, userId) {
  */
 export async function lastRemindedMap(fromMemberId) {
   const rows = await prisma.reminder.findMany({
-    where: { fromMemberId },
+    // Only the cooldown window matters, and only the newest per person — without
+    // this the query grows without bound as reminder history accumulates.
+    where: { fromMemberId, createdAt: { gte: new Date(Date.now() - REMIND_COOLDOWN_HOURS * 3600_000) } },
     orderBy: { createdAt: "desc" },
     select: { toMemberId: true, createdAt: true },
+    take: 100,
   });
   const map = {};
   for (const r of rows) if (!map[r.toMemberId]) map[r.toMemberId] = r.createdAt;

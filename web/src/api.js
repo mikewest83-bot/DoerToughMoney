@@ -50,13 +50,15 @@ export const api = {
   createGroup: (b) => req("/api/groups", { method: "POST", body: b }),
   addGroupMember: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/members`, { method: "POST", body: b }),
   removeGroupMember: (id, memberId) => req(`/api/groups/${encodeURIComponent(id)}/members/${encodeURIComponent(memberId)}`, { method: "DELETE" }),
-  addExpense: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/expenses`, { method: "POST", body: b }),
+  // Idempotent: a duplicate expense corrupts every balance in the group, so a
+  // double-tap or retry must not create two.
+  addExpense: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/expenses`, { method: "POST", body: b, idempotent: true }),
   deleteExpense: (id, expenseId) => req(`/api/groups/${encodeURIComponent(id)}/expenses/${encodeURIComponent(expenseId)}`, { method: "DELETE" }),
   addRecurring: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/recurring`, { method: "POST", body: b }),
   deleteRecurring: (id, rid) => req(`/api/groups/${encodeURIComponent(id)}/recurring/${encodeURIComponent(rid)}`, { method: "DELETE" }),
   // Moves money — idempotent so a double-tap can't settle twice.
   settle: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/settle`, { method: "POST", body: b, idempotent: true }),
-  quickSplit: (b) => req("/api/split", { method: "POST", body: b }),
+  quickSplit: (b) => req("/api/split", { method: "POST", body: b, idempotent: true }),
   remind: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/remind`, { method: "POST", body: b }),
   reminders: () => req("/api/reminders"),
   dismissReminder: (id) => req(`/api/reminders/${encodeURIComponent(id)}/seen`, { method: "POST" }),

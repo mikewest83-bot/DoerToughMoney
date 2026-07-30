@@ -67,6 +67,9 @@ const limit = (max, message) =>
 const apiLimiter = limit(120, "Too many requests. Give it a minute.");
 const authLimiter = limit(12, "Too many attempts. Wait a minute and try again.");
 const moneyLimiter = limit(30, "Slow down a moment and try again.");
+// Ledger writes don't move money but they do mutate shared state other people
+// see, so they get their own budget rather than only the broad API limit.
+const ledgerLimiter = limit(60, "Slow down a moment and try again.");
 
 app.use("/api", apiLimiter);
 
@@ -230,7 +233,7 @@ app.get("/api/groups", authRequired, async (req, res) => {
   res.json({ groups: groups.map((g) => shapeGroup(g, req.user.id)) });
 });
 
-app.post("/api/groups", authRequired, async (req, res) => {
+app.post("/api/groups", authRequired, ledgerLimiter, async (req, res) => {
   const { name, type } = req.body || {};
   const trimmed = String(name || "").trim();
   if (trimmed.length < 2) return res.status(400).json({ error: "Give the group a name." });
@@ -253,7 +256,7 @@ app.get("/api/groups/:id", authRequired, async (req, res) => {
 
 // Add by handle (they're already on even) or by email (creates a placeholder
 // that holds their share until they sign up).
-app.post("/api/groups/:id/members", authRequired, async (req, res) => {
+app.post("/api/groups/:id/members", authRequired, ledgerLimiter, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
   const { handle, email, name } = req.body || {};
@@ -283,18 +286,29 @@ app.post("/api/groups/:id/members", authRequired, async (req, res) => {
   res.status(201).json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
 });
 
-app.delete("/api/groups/:id/members/:memberId", authRequired, async (req, res) => {
+app.delete("/api/groups/:id/members/:memberId", authRequired, ledgerLimiter, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
-  if (!ctx.group.members.some((m) => m.id === req.params.memberId))
-    return res.status(404).json({ error: "That person isn't in this group." });
+  const target = ctx.group.members.find((m) => m.id === req.params.memberId);
+  if (!target) return res.status(404).json({ error: "That person isn't in this group." });
+
+  // Anyone could previously remove anyone. Removing others is limited to the
+  // group's creator; everyone else can only remove themselves (leave).
+  const isCreator = ctx.group.createdById === req.user.id;
+  const isSelf = target.id === ctx.me.id;
+  if (!isCreator && !isSelf)
+    return res.status(403).json({ error: "Only the person who created this group can remove others." });
+  if (isCreator && isSelf && ctx.group.members.length > 1)
+    return res.status(409).json({ error: "You created this group — remove the others first, or settle up and delete it." });
 
   const result = await removeMember(ctx.group.id, req.params.memberId);
   if (!result.removed) return res.status(409).json({ error: result.reason });
   res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
 });
 
-app.post("/api/groups/:id/expenses", authRequired, async (req, res) => {
+// Idempotent because a duplicate expense silently corrupts every balance in the
+// group — the same reason the money routes carry it, even though no money moves.
+app.post("/api/groups/:id/expenses", authRequired, ledgerLimiter, idempotency, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
   const { amount, description, paidByMemberId, splitMode, shares, splitMemberIds, incurredOn } = req.body || {};
@@ -440,7 +454,7 @@ app.post("/api/reminders/:reminderId/seen", authRequired, async (req, res) => {
 // Quick 1:1 "I covered this, you owe me half" — no group setup required. Runs
 // on the same engine via an implicit pair group, so the debt shows up in the
 // same balances and settles the same way.
-app.post("/api/split", authRequired, async (req, res) => {
+app.post("/api/split", authRequired, ledgerLimiter, idempotency, async (req, res) => {
   const { handle, amount, description, theirShare } = req.body || {};
   const v = validateAmount(amount);
   if (!v.ok) return res.status(400).json({ error: v.error });
