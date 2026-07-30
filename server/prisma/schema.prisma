@@ -61,7 +61,11 @@ model User {
   name                  String
   handle                String    @unique
   email                 String    @unique
-  passwordHash          String
+  // Null for a Google-only account — nothing to type in, so nothing to hash.
+  passwordHash          String?
+  // Google's `sub` claim. Set on Google sign-up, or on first Google sign-in for
+  // an existing password account whose email Google has verified matches.
+  googleId              String?   @unique
   dwollaCustomerUrl     String?   @unique
   kycStatus             KycStatus @default(PENDING)
   fundingSourceUrl      String?
@@ -79,6 +83,25 @@ model User {
   disputes          Dispute[]
   groupMemberships  GroupMember[]
   createdGroups     Group[]
+  credentials       Credential[]
+}
+
+// A passkey (WebAuthn credential) enrolled on one of this user's devices.
+// Discoverable/usernameless — sign-in doesn't ask for an identifier first, the
+// browser offers whatever passkey it holds for this domain, and this table is
+// how that credential ID resolves back to an account.
+model Credential {
+  id           String   @id @default(cuid())
+  userId       String
+  user         User     @relation(fields: [userId], references: [id])
+  credentialId String   @unique // base64url id the browser returns each sign-in
+  publicKey    Bytes
+  counter      BigInt   @default(0) // replay-attack guard; must strictly increase
+  transports   String[] @default([]) // e.g. ["internal"] for a platform authenticator
+  deviceLabel  String? // e.g. "iPhone", set from the browser at enrollment time
+  createdAt    DateTime @default(now())
+
+  @@index([userId])
 }
 
 // even's record of money movement. No in-app spendable balance — funds live

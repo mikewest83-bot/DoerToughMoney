@@ -6,7 +6,13 @@ import "express-async-errors"; // route async throws reach the error handler bel
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
-import { register, login, verifyIdentity, authRequired, publicUser } from "./auth.js";
+import { register, login, googleAuth, registerWithGoogle, verifyIdentity, authRequired, publicUser } from "./auth.js";
+import { googleConfigured } from "./google.js";
+import {
+  registrationOptions as passkeyRegOptions, registrationVerify as passkeyRegVerify,
+  authenticationOptions as passkeyAuthOptions, authenticationVerify as passkeyAuthVerify,
+  listCredentials as passkeyList,
+} from "./webauthn.js";
 import prisma, {
   getUserById, getUserByHandle, searchUsers, feedForUser, logRequest,
   setFundingSource, setFundingSourceVerified, setKycStatusByCustomerUrlSuffix,
@@ -85,12 +91,28 @@ app.get("/api/config", (_req, res) => {
     // Lets the client lead with instant bank linking instead of the slow
     // manual routing/account form.
     instantLinkEnabled: instantLinkEnabled(),
+    // Gates the "Sign in with Google" button — no point rendering it before
+    // GOOGLE_CLIENT_ID is configured.
+    googleEnabled: googleConfigured(),
+    googleClientId: googleConfigured() ? process.env.GOOGLE_CLIENT_ID : null,
   });
 });
 
 // ── auth ─────────────────────────────────────────────────
 app.post("/api/register", authLimiter, register);
 app.post("/api/login", authLimiter, login);
+app.post("/api/auth/google", authLimiter, googleAuth);
+app.post("/api/register/google", authLimiter, registerWithGoogle);
+
+// ── passkeys (Face ID / Touch ID) ────────────────────────
+// Enrollment requires being signed in already; sign-in is public and
+// usernameless — the credential ID the browser returns is how the request
+// resolves to an account, so there's no user to gate it behind beforehand.
+app.get("/api/webauthn/credentials", authRequired, passkeyList);
+app.post("/api/webauthn/register/options", authRequired, passkeyRegOptions);
+app.post("/api/webauthn/register/verify", authRequired, passkeyRegVerify);
+app.post("/api/webauthn/login/options", authLimiter, passkeyAuthOptions);
+app.post("/api/webauthn/login/verify", authLimiter, passkeyAuthVerify);
 
 // ── me ───────────────────────────────────────────────────
 app.get("/api/me", authRequired, (req, res) => {

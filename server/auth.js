@@ -1,14 +1,21 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
-import { createUser, getUserByEmail, getUserByHandle, getUserById, setDwollaCustomer } from "./db.js";
+import {
+  createUser, getUserByEmail, getUserByHandle, getUserById,
+  getUserByGoogleId, linkGoogleId, setDwollaCustomer,
+} from "./db.js";
 import { claimInvites } from "./groupsdb.js";
 import { cleanHandle } from "./logic.js";
 import { createVerifiedCustomer, getCustomerStatus } from "./dwolla/index.js";
+import { verifyGoogleToken } from "./google.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? "" : "dev_only_change_me");
 const TOKEN_TTL = "7d";
 
 const sign = (user) => jwt.sign({ uid: user.id }, JWT_SECRET, { expiresIn: TOKEN_TTL });
+// Exposed for webauthn.js — passkey sign-in ends the same way password/Google
+// sign-in do, and duplicating JWT signing would be a second copy to keep in sync.
+export const signToken = sign;
 
 // strip sensitive/internal fields before sending a user to the client
 export const publicUser = (u) => ({
@@ -39,21 +46,29 @@ const identityFieldsError = ({ address1, city, state, postalCode, dateOfBirth, s
   return null;
 };
 
-export async function register(req, res) {
-  const { name, handle, email, password, address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
-  if (!name || !handle || !email || !password)
-    return res.status(400).json({ error: "Name, handle, email, and password are all required." });
-  if (password.length < 8)
-    return res.status(400).json({ error: "Use a password of at least 8 characters." });
+/**
+ * The shared tail of account creation: validate KYC fields, verify identity
+ * with Dwolla, create the local user, and claim any pending group invites.
+ * Used by both password registration and Google registration so there's one
+ * identity-verification path instead of two copies drifting apart.
+ *
+ * @returns {{ok:true, user, joinedGroups}} | {{ok:false, status, error}}
+ */
+async function completeRegistration({
+  name, handle, email, address1, city, state, postalCode, dateOfBirth, ssn,
+  passwordHash = null, googleId = null,
+}) {
   const fieldErr = identityFieldsError({ address1, city, state, postalCode, dateOfBirth, ssn });
-  if (fieldErr) return res.status(400).json({ error: fieldErr });
+  if (fieldErr) return { ok: false, status: 400, error: fieldErr };
 
   const normalizedEmail = String(email).trim().toLowerCase();
   const h = cleanHandle(handle).toLowerCase();
-  if (!/^@[a-z0-9_]{3,24}$/.test(h)) return res.status(400).json({ error: "Use 3–24 letters, numbers, or underscores for your handle." });
-  if (String(name).trim().length > 80 || normalizedEmail.length > 254) return res.status(400).json({ error: "Name or email is too long." });
-  if (await getUserByEmail(normalizedEmail)) return res.status(409).json({ error: "That email is already registered." });
-  if (await getUserByHandle(h)) return res.status(409).json({ error: "That handle is taken." });
+  if (!/^@[a-z0-9_]{3,24}$/.test(h))
+    return { ok: false, status: 400, error: "Use 3–24 letters, numbers, or underscores for your handle." };
+  if (String(name).trim().length > 80 || normalizedEmail.length > 254)
+    return { ok: false, status: 400, error: "Name or email is too long." };
+  if (await getUserByEmail(normalizedEmail)) return { ok: false, status: 409, error: "That email is already registered." };
+  if (await getUserByHandle(h)) return { ok: false, status: 409, error: "That handle is taken." };
 
   // Verify identity with Dwolla BEFORE creating the local account, so a
   // rejected application never leaves behind an orphaned user row. The SSN
@@ -68,12 +83,11 @@ export async function register(req, res) {
       dateOfBirth, ssn: String(ssn).replace(/-/g, ""),
     });
   } catch (e) {
-    return res.status(400).json({ error: dwollaErrorMessage(e) });
+    return { ok: false, status: 400, error: dwollaErrorMessage(e) };
   }
   const kycStatus = (await getCustomerStatus(dwollaCustomerUrl)).toUpperCase();
 
-  const password_hash = await bcrypt.hash(password, 12);
-  const user = await createUser({ name: String(name).trim(), handle: h, email: normalizedEmail, password_hash });
+  const user = await createUser({ name: String(name).trim(), handle: h, email: normalizedEmail, password_hash: passwordHash, googleId });
   await setDwollaCustomer(user.id, { dwollaCustomerUrl, kycStatus });
 
   // Link any group invites waiting on this email so the new user lands straight
@@ -86,8 +100,87 @@ export async function register(req, res) {
     console.error("[groups] failed to claim invites for new user:", e);
   }
 
-  const withDwolla = await getUserById(user.id);
-  res.json({ token: sign(withDwolla), user: publicUser(withDwolla), joinedGroups });
+  return { ok: true, user: await getUserById(user.id), joinedGroups };
+}
+
+export async function register(req, res) {
+  const { name, handle, email, password, address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
+  if (!name || !handle || !email || !password)
+    return res.status(400).json({ error: "Name, handle, email, and password are all required." });
+  if (password.length < 8)
+    return res.status(400).json({ error: "Use a password of at least 8 characters." });
+
+  const passwordHash = await bcrypt.hash(password, 12);
+  const result = await completeRegistration({ name, handle, email, address1, city, state, postalCode, dateOfBirth, ssn, passwordHash });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  res.json({ token: sign(result.user), user: publicUser(result.user), joinedGroups: result.joinedGroups });
+}
+
+// ── Google sign-in ───────────────────────────────────────
+// Authentication only — Google proves who someone is, not that they've passed
+// identity verification. A brand-new Google user still goes through
+// completeRegistration (minus a password) before they can send or receive money.
+
+/**
+ * POST /api/auth/google — body { idToken }.
+ * Resolves to an existing account (by googleId, or by linking a
+ * Google-verified email to a matching password account), or reports that a
+ * new account is needed with the name/email Google vouches for.
+ */
+export async function googleAuth(req, res) {
+  const { idToken } = req.body || {};
+  if (!idToken) return res.status(400).json({ error: "Missing Google credential." });
+
+  let payload;
+  try {
+    payload = await verifyGoogleToken(idToken);
+  } catch {
+    return res.status(400).json({ error: "Couldn't verify that Google sign-in. Please try again." });
+  }
+  if (!payload.emailVerified) return res.status(400).json({ error: "That Google account's email isn't verified." });
+
+  const byGoogleId = await getUserByGoogleId(payload.googleId);
+  if (byGoogleId) return res.json({ status: "ok", token: sign(byGoogleId), user: publicUser(byGoogleId) });
+
+  // Same verified email as an existing password account — same person,
+  // proven independently by Google, so link rather than creating a duplicate.
+  const byEmail = await getUserByEmail(payload.email.toLowerCase());
+  if (byEmail) {
+    await linkGoogleId(byEmail.id, payload.googleId);
+    const linked = await getUserById(byEmail.id);
+    return res.json({ status: "ok", token: sign(linked), user: publicUser(linked) });
+  }
+
+  res.json({ status: "needs_registration", name: payload.name, email: payload.email });
+}
+
+/**
+ * POST /api/register/google — body { idToken, handle, ...KYC fields }.
+ * The idToken is re-verified here rather than trusting the name/email the
+ * client echoed back from the /api/auth/google response.
+ */
+export async function registerWithGoogle(req, res) {
+  const { idToken, handle, address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
+  if (!idToken || !handle) return res.status(400).json({ error: "Missing required fields." });
+
+  let payload;
+  try {
+    payload = await verifyGoogleToken(idToken);
+  } catch {
+    return res.status(400).json({ error: "That Google sign-in expired. Please try again." });
+  }
+  if (!payload.emailVerified) return res.status(400).json({ error: "That Google account's email isn't verified." });
+  if (await getUserByGoogleId(payload.googleId)) return res.status(409).json({ error: "That Google account is already registered." });
+
+  const result = await completeRegistration({
+    name: payload.name, handle, email: payload.email,
+    address1, city, state, postalCode, dateOfBirth, ssn,
+    googleId: payload.googleId,
+  });
+  if (!result.ok) return res.status(result.status).json({ error: result.error });
+
+  res.json({ token: sign(result.user), user: publicUser(result.user), joinedGroups: result.joinedGroups });
 }
 
 // Complete identity verification for an account created before the Dwolla
@@ -125,7 +218,10 @@ export async function verifyIdentity(req, res) {
 export async function login(req, res) {
   const { email, password } = req.body || {};
   const user = await getUserByEmail(String(email || "").trim().toLowerCase());
-  if (!user) return res.status(401).json({ error: "No account matches those details." });
+  // A Google-only account has no passwordHash to compare against; bcrypt would
+  // throw on a null hash, and either way there's no password to check.
+  if (!user || !user.passwordHash)
+    return res.status(401).json({ error: user ? "That account signs in with Google." : "No account matches those details." });
   const ok = await bcrypt.compare(password || "", user.passwordHash);
   if (!ok) return res.status(401).json({ error: "No account matches those details." });
   res.json({ token: sign(user), user: publicUser(user) });

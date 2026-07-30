@@ -33,6 +33,13 @@ async function req(path, { method = "GET", body, idempotent = false } = {}) {
 export const api = {
   register: (b) => req("/api/register", { method: "POST", body: b }),
   login: (b) => req("/api/login", { method: "POST", body: b }),
+  googleAuth: (idToken) => req("/api/auth/google", { method: "POST", body: { idToken } }),
+  registerWithGoogle: (b) => req("/api/register/google", { method: "POST", body: b }),
+  passkeyCredentials: () => req("/api/webauthn/credentials"),
+  passkeyRegOptions: () => req("/api/webauthn/register/options", { method: "POST" }),
+  passkeyRegVerify: (b) => req("/api/webauthn/register/verify", { method: "POST", body: b }),
+  passkeyLoginOptions: () => req("/api/webauthn/login/options", { method: "POST" }),
+  passkeyLoginVerify: (b) => req("/api/webauthn/login/verify", { method: "POST", body: b }),
   me: () => req("/api/me"),
   config: () => req("/api/config"),
   feed: () => req("/api/feed"),

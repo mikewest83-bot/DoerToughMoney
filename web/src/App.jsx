@@ -1,9 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Search, ArrowLeft, Delete, Check, ArrowUpRight,
   ArrowDownLeft, Clock, X, LogOut, Building2, ShieldCheck, Share2, AlertCircle,
+  Fingerprint,
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
+import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
 import { api, setToken, hasToken } from "./api.js";
 import { GroupsList, GroupDetail, ReminderBanners } from "./Groups.jsx";
 
@@ -130,18 +132,100 @@ function Auth({ onDone, initialMode = "login" }) {
     address1: "", city: "", state: "", postalCode: "", dateOfBirth: "", ssn: "",
   });
   const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
+  // Which action is in flight, so the three sign-in paths (password, Google,
+  // passkey) don't show each other's spinners.
+  const [busy, setBusy] = useState(null); // null | "password" | "google" | "passkey"
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async () => {
-    setErr(""); setBusy(true);
+    setErr(""); setBusy("password");
     try {
       const res = mode === "login"
         ? await api.login({ email: form.email, password: form.password })
         : await api.register(form);
       setToken(res.token);
       onDone(res.user);
-    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+    } catch (e) { setErr(e.message); } finally { setBusy(null); }
+  };
+
+  // ── Sign in with Google ──────────────────────────────────
+  // Additive: existing password accounts are untouched. A brand-new Google
+  // user still has to complete identity verification — Google proves who
+  // they are, not that they've passed KYC — so a first-time sign-in lands in
+  // `pendingGoogle` and the form below switches to a short completion step
+  // (handle + the same KYC fields registration already asks for).
+  const [googleCfg, setGoogleCfg] = useState({ enabled: false, clientId: null });
+  const [pendingGoogle, setPendingGoogle] = useState(null); // { idToken, name, email }
+  const googleBtnRef = useRef(null);
+
+  useEffect(() => {
+    api.config().then((c) => setGoogleCfg({ enabled: !!c.googleEnabled, clientId: c.googleClientId })).catch(() => {});
+  }, []);
+
+  const handleGoogleCredential = useCallback(async (response) => {
+    setErr(""); setBusy("google");
+    try {
+      const res = await api.googleAuth(response.credential);
+      if (res.status === "ok") { setToken(res.token); onDone(res.user); }
+      else setPendingGoogle({ idToken: response.credential, name: res.name, email: res.email });
+    } catch (e) { setErr(e.message); } finally { setBusy(null); }
+  }, [onDone]);
+
+  useEffect(() => {
+    if (!googleCfg.enabled || !googleCfg.clientId || pendingGoogle) return;
+    const render = () => {
+      if (!window.google?.accounts?.id || !googleBtnRef.current) return;
+      window.google.accounts.id.initialize({ client_id: googleCfg.clientId, callback: handleGoogleCredential });
+      window.google.accounts.id.renderButton(googleBtnRef.current, {
+        theme: "outline", size: "large", width: 336, text: mode === "login" ? "signin_with" : "signup_with",
+      });
+    };
+    if (window.google?.accounts?.id) { render(); return; }
+    // Loaded on demand, only once Google is actually configured, so the login
+    // screen never fetches third-party JS it won't use.
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.onload = render;
+    document.head.appendChild(script);
+  }, [googleCfg, mode, pendingGoogle, handleGoogleCredential]);
+
+  const submitGoogleRegistration = async () => {
+    setErr(""); setBusy("google");
+    try {
+      const res = await api.registerWithGoogle({
+        idToken: pendingGoogle.idToken, handle: form.handle,
+        address1: form.address1, city: form.city, state: form.state,
+        postalCode: form.postalCode, dateOfBirth: form.dateOfBirth, ssn: form.ssn,
+      });
+      setToken(res.token);
+      onDone(res.user);
+    } catch (e) { setErr(e.message); } finally { setBusy(null); }
+  };
+
+  // ── Face ID / Touch ID ────────────────────────────────────
+  // Sign-in only — enrolling a passkey happens from inside the app once
+  // already authenticated (see the prompt on the account card), so this
+  // button only ever appears on the login side, never registration.
+  const [canPasskey, setCanPasskey] = useState(false);
+  useEffect(() => {
+    window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.()
+      .then(setCanPasskey).catch(() => {});
+  }, []);
+
+  const passkeySignIn = async () => {
+    setErr(""); setBusy("passkey");
+    try {
+      const { attemptId, options } = await api.passkeyLoginOptions();
+      const response = await startAuthentication({ optionsJSON: options });
+      const res = await api.passkeyLoginVerify({ attemptId, response });
+      setToken(res.token);
+      onDone(res.user);
+    } catch (e) {
+      // The user cancelling the native picker throws NotAllowedError — that's
+      // not a failure worth a red error message, just let them try something else.
+      if (e?.name !== "NotAllowedError") setErr(e.message || "Couldn't sign in with that passkey.");
+    } finally { setBusy(null); }
   };
 
   const inputStyle = {
@@ -181,15 +265,24 @@ function Auth({ onDone, initialMode = "login" }) {
         </div>
         <p style={{ color: C.muted, fontSize: 15, marginTop: 4 }}>Settle up with anyone.</p>
 
-        <div style={{ marginTop: 26 }}>
-          {mode === "register" && (<>
-            {field("Full name", "name", "text", { autoComplete: "name" })}
-            {field("Handle (e.g. @you)", "handle", "text", { autoComplete: "username" })}
-          </>)}
-          {field("Email", "email", "email", { autoComplete: "email" })}
-          {field("Password", "password", "password", { autoComplete: mode === "register" ? "new-password" : "current-password" })}
+        {pendingGoogle ? (
+          // A brand-new Google account: name/email are already proven by
+          // Google (shown, not editable), so this only asks for what Google
+          // couldn't provide — a handle and the identity-verification fields
+          // registration already collects.
+          <div style={{ marginTop: 26 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px", borderRadius: 14, background: C.brandSoft, marginBottom: 14 }}>
+              <div style={{ width: 34, height: 34, borderRadius: 999, background: C.brand, color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 14, flexShrink: 0 }}>
+                {pendingGoogle.name?.[0]?.toUpperCase() || "G"}
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <p style={{ margin: 0, fontSize: 14, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pendingGoogle.name}</p>
+                <p style={{ margin: 0, fontSize: 12.5, color: C.muted, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pendingGoogle.email}</p>
+              </div>
+            </div>
 
-          {mode === "register" && (<>
+            {field("Handle (e.g. @you)", "handle", "text", { autoComplete: "username" })}
+
             <p style={{ fontSize: 12, color: C.muted, marginTop: 22, marginBottom: -2, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
               Identity verification
             </p>
@@ -202,25 +295,86 @@ function Auth({ onDone, initialMode = "login" }) {
               <div style={{ flex: 1 }}>{field("State (e.g. CA)", "state", "text", { autoComplete: "address-level1" })}</div>
               <div style={{ flex: 1 }}>{field("ZIP", "postalCode", "text", { autoComplete: "postal-code", inputMode: "numeric" })}</div>
             </div>
-            {/* Needs a visible label — date inputs ignore placeholder, so this
-                would otherwise read as a bare mm/dd/yyyy. */}
             {field("", "dateOfBirth", "date", { autoComplete: "bday", label: "Date of birth" })}
             {field("000-00-0000", "ssn", "text", { inputMode: "numeric", label: "Social Security Number" })}
             <p style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Used once to verify your identity — never stored by even.</p>
-          </>)}
 
-          {err && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 10 }}>{err}</p>}
-          <button onClick={submit} disabled={busy}
-            style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
-              background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
-            {busy ? "…" : mode === "login" ? "Sign in" : "Create account"}
+            {err && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 10 }}>{err}</p>}
+            <button onClick={submitGoogleRegistration} disabled={busy === "google"}
+              style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
+                background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy === "google" ? 0.6 : 1 }}>
+              {busy === "google" ? "…" : "Finish creating account"}
+            </button>
+            <button onClick={() => { setErr(""); setPendingGoogle(null); }}
+              style={{ marginTop: 12, width: "100%", background: "none", border: "none", color: C.muted, fontSize: 14 }}>
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div style={{ marginTop: 26 }}>
+            {/* Faster paths back in. Passkeys are sign-in only — enrolling one
+                happens from inside the app once already authenticated. */}
+            {mode === "login" && canPasskey && (
+              <button onClick={passkeySignIn} disabled={busy === "passkey"}
+                style={{ width: "100%", padding: 13, borderRadius: 14, border: `1px solid ${C.line}`, background: C.surface,
+                  color: C.ink, fontWeight: 700, fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+                  cursor: "pointer", opacity: busy === "passkey" ? 0.6 : 1 }}>
+                <Fingerprint size={18} /> {busy === "passkey" ? "…" : "Sign in with Face ID / Touch ID"}
+              </button>
+            )}
+            {googleCfg.enabled && (
+              <div ref={googleBtnRef} style={{ display: "flex", justifyContent: "center", marginTop: mode === "login" && canPasskey ? 10 : 0 }} />
+            )}
+            {(canPasskey && mode === "login" || googleCfg.enabled) && (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, margin: "16px 0" }}>
+                <div style={{ flex: 1, height: 1, background: C.line }} />
+                <span style={{ fontSize: 12, color: C.muted }}>or</span>
+                <div style={{ flex: 1, height: 1, background: C.line }} />
+              </div>
+            )}
+
+            {mode === "register" && (<>
+              {field("Full name", "name", "text", { autoComplete: "name" })}
+              {field("Handle (e.g. @you)", "handle", "text", { autoComplete: "username" })}
+            </>)}
+            {field("Email", "email", "email", { autoComplete: "email" })}
+            {field("Password", "password", "password", { autoComplete: mode === "register" ? "new-password" : "current-password" })}
+
+            {mode === "register" && (<>
+              <p style={{ fontSize: 12, color: C.muted, marginTop: 22, marginBottom: -2, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                Identity verification
+              </p>
+              <p style={{ fontSize: 12.5, color: C.muted, margin: "4px 0 0" }}>
+                Required to send and receive money — even's payment partner runs a one-time identity check.
+              </p>
+              {field("Street address", "address1", "text", { autoComplete: "street-address" })}
+              {field("City", "city", "text", { autoComplete: "address-level2" })}
+              <div style={{ display: "flex", gap: 8 }}>
+                <div style={{ flex: 1 }}>{field("State (e.g. CA)", "state", "text", { autoComplete: "address-level1" })}</div>
+                <div style={{ flex: 1 }}>{field("ZIP", "postalCode", "text", { autoComplete: "postal-code", inputMode: "numeric" })}</div>
+              </div>
+              {/* Needs a visible label — date inputs ignore placeholder, so this
+                  would otherwise read as a bare mm/dd/yyyy. */}
+              {field("", "dateOfBirth", "date", { autoComplete: "bday", label: "Date of birth" })}
+              {field("000-00-0000", "ssn", "text", { inputMode: "numeric", label: "Social Security Number" })}
+              <p style={{ fontSize: 11.5, color: C.muted, marginTop: 6 }}>Used once to verify your identity — never stored by even.</p>
+            </>)}
+
+            {err && <p style={{ color: "#E5556E", fontSize: 13, marginTop: 10 }}>{err}</p>}
+            <button onClick={submit} disabled={!!busy}
+              style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
+                background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
+              {busy === "password" ? "…" : mode === "login" ? "Sign in" : "Create account"}
+            </button>
+          </div>
+        )}
+
+        {!pendingGoogle && (
+          <button onClick={() => { setErr(""); setMode(mode === "login" ? "register" : "login"); }}
+            style={{ marginTop: 18, background: "none", border: "none", color: C.muted, fontSize: 14 }}>
+            {mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
           </button>
-        </div>
-
-        <button onClick={() => { setErr(""); setMode(mode === "login" ? "register" : "login"); }}
-          style={{ marginTop: 18, background: "none", border: "none", color: C.muted, fontSize: 14 }}>
-          {mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
-        </button>
+        )}
 
         <p style={{ marginTop: 28, fontSize: 12, color: C.muted, textAlign: "center" }}>
           By continuing you agree to our{" "}
@@ -261,10 +415,39 @@ function Wallet({ initialAuthMode = "login" }) {
 
   const [disputes, setDisputes] = useState([]);
 
+  // ── passkey enrollment prompt ─────────────────────────────
+  // Shown once per account, on a device that supports it, until the user
+  // either enables it or dismisses it — same dismissal-flag pattern as the
+  // iOS install banner (useIosInstallPrompt above).
+  const [passkeySupported, setPasskeySupported] = useState(false);
+  const [hasPasskey, setHasPasskey] = useState(true); // default true so it never flashes before the real check lands
+  const [enrollDismissed, setEnrollDismissed] = useState(localStorage.getItem("even_passkey_prompt_dismissed") === "1");
+  const [enrollBusy, setEnrollBusy] = useState(false);
+  const [enrollErr, setEnrollErr] = useState("");
+
+  useEffect(() => {
+    window.PublicKeyCredential?.isUserVerifyingPlatformAuthenticatorAvailable?.()
+      .then(setPasskeySupported).catch(() => {});
+  }, []);
+
+  const enrollPasskey = async () => {
+    setEnrollBusy(true); setEnrollErr("");
+    try {
+      const { attemptId, options } = await api.passkeyRegOptions();
+      const response = await startRegistration({ optionsJSON: options });
+      await api.passkeyRegVerify({ attemptId, response, deviceLabel: navigator.platform || "This device" });
+      setHasPasskey(true);
+    } catch (e) {
+      if (e?.name !== "NotAllowedError") setEnrollErr(e.message || "Couldn't turn that on. Please try again.");
+    } finally { setEnrollBusy(false); }
+  };
+  const dismissEnroll = () => { localStorage.setItem("even_passkey_prompt_dismissed", "1"); setEnrollDismissed(true); };
+
   const refresh = useCallback(async () => {
     const [{ user }, { feed }] = await Promise.all([api.me(), api.feed()]);
     setUser(user); setFeed(feed);
     try { setDisputes((await api.disputes()).disputes); } catch {}
+    try { setHasPasskey((await api.passkeyCredentials()).credentials.length > 0); } catch {}
   }, []);
 
   useEffect(() => {
@@ -473,6 +656,25 @@ function Wallet({ initialAuthMode = "login" }) {
 
         {/* Someone asking to be paid outranks everything else on the screen. */}
         <ReminderBanners onOpenGroup={(id) => { setTab("shared"); setOpenGroupId(id); }} />
+
+        {passkeySupported && !hasPasskey && !enrollDismissed && (
+          <div style={{ margin: "12px 20px 0", padding: "12px 14px", borderRadius: 16, background: C.brandSoft, border: "1px solid #D9D4FB", display: "flex", alignItems: "center", gap: 11 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 10, background: C.brand, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <Fingerprint size={16} color="#fff" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <p style={{ margin: 0, fontSize: 13.5, fontWeight: 600 }}>Turn on Face ID / Touch ID?</p>
+              <p style={{ margin: 0, fontSize: 12, color: C.muted }}>{enrollErr || "Skip typing your password next time."}</p>
+            </div>
+            <button onClick={enrollPasskey} disabled={enrollBusy}
+              style={{ border: "none", background: C.brand, color: "#fff", borderRadius: 10, padding: "7px 11px", fontSize: 12.5, fontWeight: 700, cursor: "pointer", flexShrink: 0, opacity: enrollBusy ? 0.6 : 1 }}>
+              {enrollBusy ? "…" : "Enable"}
+            </button>
+            <button onClick={dismissEnroll} aria-label="Not now" style={{ ...iconBtn, color: C.muted, flexShrink: 0, padding: 2 }}>
+              <X size={15} />
+            </button>
+          </div>
+        )}
 
         {/* Activity vs shared expenses. Groups get equal billing with the
             payment feed because that's the reason to be here. */}
