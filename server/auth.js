@@ -1,9 +1,10 @@
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import {
-  createUser, getUserByEmail, getUserById, getUserByGoogleId, linkGoogleId,
+  createUser, getUserByEmail, getUserById, getUserByGoogleId, linkGoogleId, setDwollaCustomer,
 } from "./db.js";
 import { verifyGoogleToken } from "./google.js";
+import { createVerifiedCustomer, getCustomerStatus } from "./dwolla/index.js";
 
 const JWT_SECRET = process.env.JWT_SECRET || (process.env.NODE_ENV === "production" ? "" : "dev_only_change_me");
 const TOKEN_TTL = "7d";
@@ -17,6 +18,29 @@ export const signToken = sign;
 export const publicUser = (u) => ({
   id: u.id, name: u.name, email: u.email,
 });
+
+// Validate the KYC fields required to verify identity with Dwolla.
+// Returns an error string, or null if everything checks out.
+const identityFieldsError = ({ address1, city, state, postalCode, dateOfBirth, ssn }) => {
+  if (!address1 || !city || !state || !postalCode || !dateOfBirth || !ssn)
+    return "Address, date of birth, and SSN are required to verify your identity.";
+  if (!/^[A-Za-z]{2}$/.test(state)) return "State must be a 2-letter code.";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateOfBirth)) return "Date of birth must be YYYY-MM-DD.";
+  if (!/^\d{9}$/.test(String(ssn).replace(/-/g, ""))) return "Enter a full 9-digit SSN.";
+  return null;
+};
+
+// Split a display name into Dwolla's required firstName/lastName. A single
+// word becomes both (Dwolla requires a non-empty lastName).
+const splitName = (name) => {
+  const parts = String(name).trim().split(/\s+/);
+  return { firstName: parts[0], lastName: parts.length > 1 ? parts.slice(1).join(" ") : parts[0] };
+};
+
+// Dwolla returns validation failures as a structured body; surface the first
+// human-readable message instead of a generic 500.
+const dwollaErrorMessage = (e) =>
+  e?.body?._embedded?.errors?.[0]?.message || e?.body?.message || "We couldn't verify your identity with the information provided.";
 
 export async function register(req, res) {
   const { name, email, password } = req.body || {};
@@ -100,6 +124,39 @@ export async function registerWithGoogle(req, res) {
 
   const user = await createUser({ name: payload.name, email: normalizedEmail, googleId: payload.googleId });
   res.json({ token: sign(user), user: publicUser(user) });
+}
+
+// Complete identity verification for an account created before the Dwolla
+// migration (it has no Verified Customer yet). Same fields and flow as
+// registration used to collect; SSN passes straight to Dwolla and is never
+// stored.
+export async function verifyIdentity(req, res) {
+  if (req.user.dwollaCustomerUrl) {
+    // Customer already exists — just re-read status (covers webhook misses).
+    const kycStatus = (await getCustomerStatus(req.user.dwollaCustomerUrl)).toUpperCase();
+    await setDwollaCustomer(req.user.id, { dwollaCustomerUrl: req.user.dwollaCustomerUrl, kycStatus });
+    return res.json({ user: publicUser(await getUserById(req.user.id)) });
+  }
+
+  const { address1, city, state, postalCode, dateOfBirth, ssn } = req.body || {};
+  const fieldErr = identityFieldsError({ address1, city, state, postalCode, dateOfBirth, ssn });
+  if (fieldErr) return res.status(400).json({ error: fieldErr });
+
+  const { firstName, lastName } = splitName(req.user.name);
+  let dwollaCustomerUrl;
+  try {
+    dwollaCustomerUrl = await createVerifiedCustomer({
+      firstName, lastName, email: req.user.email,
+      address1: String(address1).trim(), city: String(city).trim(),
+      state: state.toUpperCase(), postalCode: String(postalCode).trim(),
+      dateOfBirth, ssn: String(ssn).replace(/-/g, ""),
+    });
+  } catch (e) {
+    return res.status(400).json({ error: dwollaErrorMessage(e) });
+  }
+  const kycStatus = (await getCustomerStatus(dwollaCustomerUrl)).toUpperCase();
+  await setDwollaCustomer(req.user.id, { dwollaCustomerUrl, kycStatus });
+  res.json({ user: publicUser(await getUserById(req.user.id)) });
 }
 
 export async function login(req, res) {
