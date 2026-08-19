@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import {
-  Plus, X, Users, ArrowLeft, Check, Repeat, Trash2, UserPlus, Wallet, ArrowRight,
+  Plus, X, Users, ArrowLeft, Check, Repeat, Trash2, UserPlus, ArrowRight,
   Bell, Send,
 } from "lucide-react";
 import { api } from "./api.js";
@@ -530,7 +530,7 @@ function OwedRow({ group, t, onUpdated }) {
             {t.fromName}
           </p>
           <p style={{ margin: 0, fontSize: 11.5, color: !t.joined ? C.amber : C.muted, fontWeight: !t.joined ? 600 : 400, whiteSpace: "nowrap" }}>
-            {!t.joined ? "Hasn't joined yet" : reminded ? `Nudged · again in ${t.remindHoursLeft}h` : " "}
+            {!t.joined ? "Hasn't joined yet" : reminded ? `Nudged · again in ${t.remindHoursLeft}h` : " "}
           </p>
         </div>
         <span style={{ fontFamily: mono, fontWeight: 700, fontSize: 14, color: C.green, flexShrink: 0 }}>${money(t.amount)}</span>
@@ -823,13 +823,14 @@ function RecurringSheet({ group, onClose, onSaved }) {
 // ── settle up ────────────────────────────────────────────
 function SettleSheet({ group, target, onClose, onSettled }) {
   const [amount, setAmount] = useState(String(target.amount.toFixed(2)));
-  const [speed, setSpeed] = useState("STANDARD");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  const go = async (method) => {
+  // Cash-only: DoerToughMoney doesn't move money between users, so settling
+  // up just records that a payoff happened outside the app.
+  const go = async () => {
     setBusy(true); setErr("");
-    try { onSettled((await api.settle(group.id, { toMemberId: target.toMemberId, amount, method, speed })).group); }
+    try { onSettled((await api.settle(group.id, { toMemberId: target.toMemberId, amount })).group); }
     catch (e) { setErr(e.message); } finally { setBusy(false); }
   };
 
@@ -848,42 +849,13 @@ function SettleSheet({ group, target, onClose, onSettled }) {
         <input value={amount} onChange={(e) => setAmount(e.target.value)} inputMode="decimal"
           style={{ border: "none", outline: "none", background: "transparent", fontFamily: mono, fontSize: 26, fontWeight: 700, width: "100%" }} />
       </div>
-      <p style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>No fee — you're moving money you already owe.</p>
+      <p style={{ fontSize: 12, color: C.muted, marginTop: 8 }}>
+        This just records that you settled up — DoerToughMoney doesn't move money between accounts.
+      </p>
 
-      {target.canTransfer ? (
-        <>
-          <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
-            {[{ k: "STANDARD", l: "Standard", s: "1–3 business days" }, { k: "EXPRESS", l: "Express", s: "Same business day" }].map((o) => (
-              <button key={o.k} onClick={() => setSpeed(o.k)}
-                style={{
-                  flex: 1, textAlign: "left", padding: "11px 13px", borderRadius: 14, cursor: "pointer",
-                  border: `1.5px solid ${speed === o.k ? C.brand : C.line}`,
-                  background: speed === o.k ? C.brandSoft : C.surface,
-                }}>
-                <div style={{ fontSize: 13, fontWeight: 700, color: speed === o.k ? C.brand : C.ink }}>{o.l}</div>
-                <div style={{ fontSize: 11.5, color: C.muted }}>{o.s}</div>
-              </button>
-            ))}
-          </div>
-          {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
-          <button onClick={() => go("transfer")} disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.5 : 1 }}>
-            {busy ? "…" : `Send $${money(parseFloat(amount) || 0)}`}
-          </button>
-        </>
-      ) : (
-        <>
-          <div style={{ marginTop: 12, background: "#FFF6E5", border: "1px solid #F0DDB0", borderRadius: 14, padding: "11px 13px" }}>
-            <p style={{ margin: 0, fontSize: 12.5, color: "#8A6416", lineHeight: 1.5 }}>
-              A bank transfer needs you both verified with a linked bank. You can still record that you settled another way.
-            </p>
-          </div>
-          {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
-        </>
-      )}
-
-      <button onClick={() => go("cash")} disabled={busy}
-        style={{ width: "100%", marginTop: 10, padding: 13, borderRadius: 14, border: `1px solid ${C.line}`, background: "transparent", color: C.ink, fontWeight: 600, fontSize: 14, display: "flex", alignItems: "center", justifyContent: "center", gap: 7, cursor: "pointer", opacity: busy ? 0.5 : 1 }}>
-        <Wallet size={15} /> We settled outside even
+      {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
+      <button onClick={go} disabled={busy} style={{ ...primaryBtn, opacity: busy ? 0.5 : 1 }}>
+        {busy ? "…" : `Mark $${money(parseFloat(amount) || 0)} as settled`}
       </button>
     </Sheet>
   );
