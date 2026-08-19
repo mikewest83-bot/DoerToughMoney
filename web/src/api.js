@@ -20,7 +20,7 @@ async function req(path, { method = "GET", body, idempotent = false } = {}) {
     headers: {
       "Content-Type": "application/json",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      // Safe-to-retry money actions carry a key so a retry never moves money twice.
+      // Safe-to-retry actions carry a key so a retry never double-creates.
       ...(idempotent ? { "Idempotency-Key": newIdemKey() } : {}),
     },
     body: body ? JSON.stringify(body) : undefined,
@@ -42,14 +42,51 @@ export const api = {
   passkeyLoginVerify: (b) => req("/api/webauthn/login/verify", { method: "POST", body: b }),
   me: () => req("/api/me"),
   config: () => req("/api/config"),
-  feed: () => req("/api/feed"),
   users: (q) => req(`/api/users?q=${encodeURIComponent(q || "")}`),
-  pay: (b) => req("/api/pay", { method: "POST", body: b, idempotent: true }),
-  // b: { handle, amount, note, speed?: "STANDARD" | "EXPRESS" }
-  request: (b) => req("/api/request", { method: "POST", body: b, idempotent: true }),
-  verifyIdentity: (b) => req("/api/verify-identity", { method: "POST", body: b }),
-  fileDispute: (b) => req("/api/disputes", { method: "POST", body: b, idempotent: true }),
-  disputes: () => req("/api/disputes"),
+
+  // ── linked banks (Plaid) ──
+  plaidLinkToken: () => req("/api/plaid/link-token", { method: "POST" }),
+  // Idempotent: retrying an interrupted Link flow must not create a duplicate PlaidItem.
+  plaidExchange: (publicToken) => req("/api/plaid/exchange", { method: "POST", body: { publicToken }, idempotent: true }),
+  plaidItems: () => req("/api/plaid/items"),
+  plaidRemoveItem: (id) => req(`/api/plaid/items/${encodeURIComponent(id)}`, { method: "DELETE" }),
+  plaidSync: () => req("/api/plaid/sync", { method: "POST" }),
+
+  // ── accounts / transactions ──
+  accounts: () => req("/api/accounts"),
+  transactions: (params = {}) => {
+    const qs = new URLSearchParams();
+    if (params.from) qs.set("from", params.from);
+    if (params.to) qs.set("to", params.to);
+    if (params.category) qs.set("category", params.category);
+    if (params.limit) qs.set("limit", params.limit);
+    const s = qs.toString();
+    return req(`/api/transactions${s ? `?${s}` : ""}`);
+  },
+  updateTransaction: (id, b) => req(`/api/transactions/${encodeURIComponent(id)}`, { method: "PATCH", body: b }),
+
+  // ── bills ──
+  bills: () => req("/api/bills"),
+  createBill: (b) => req("/api/bills", { method: "POST", body: b }),
+  updateBill: (id, b) => req(`/api/bills/${encodeURIComponent(id)}`, { method: "PATCH", body: b }),
+  deleteBill: (id) => req(`/api/bills/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ── budgets ──
+  budgets: () => req("/api/budgets"),
+  upsertBudget: (b) => req("/api/budgets", { method: "POST", body: b }),
+  deleteBudget: (id) => req(`/api/budgets/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ── goals ──
+  goals: () => req("/api/goals"),
+  createGoal: (b) => req("/api/goals", { method: "POST", body: b }),
+  updateGoal: (id, b) => req(`/api/goals/${encodeURIComponent(id)}`, { method: "PATCH", body: b }),
+  deleteGoal: (id) => req(`/api/goals/${encodeURIComponent(id)}`, { method: "DELETE" }),
+
+  // ── insights ──
+  insights: () => req("/api/insights"),
+
+  // ── DealTough (savings / negotiation AI) ──
+  dealtoughAnalyze: (b) => req("/api/dealtough/analyze", { method: "POST", body: b }),
 
   // ── shared expenses ──
   groups: () => req("/api/groups"),
@@ -63,14 +100,10 @@ export const api = {
   deleteExpense: (id, expenseId) => req(`/api/groups/${encodeURIComponent(id)}/expenses/${encodeURIComponent(expenseId)}`, { method: "DELETE" }),
   addRecurring: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/recurring`, { method: "POST", body: b }),
   deleteRecurring: (id, rid) => req(`/api/groups/${encodeURIComponent(id)}/recurring/${encodeURIComponent(rid)}`, { method: "DELETE" }),
-  // Moves money — idempotent so a double-tap can't settle twice.
+  // Records a cash payoff (no transfer). Idempotent so a double-tap can't record it twice.
   settle: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/settle`, { method: "POST", body: b, idempotent: true }),
   quickSplit: (b) => req("/api/split", { method: "POST", body: b, idempotent: true }),
   remind: (id, b) => req(`/api/groups/${encodeURIComponent(id)}/remind`, { method: "POST", body: b }),
   reminders: () => req("/api/reminders"),
   dismissReminder: (id) => req(`/api/reminders/${encodeURIComponent(id)}/seen`, { method: "POST" }),
-  bankLinkStart: () => req("/api/bank/link/start", { method: "POST" }),
-  bankLinkComplete: (b) => req("/api/bank/link/complete", { method: "POST", body: b, idempotent: true }),
-  bankLink: (b) => req("/api/bank/link", { method: "POST", body: b }),
-  bankVerify: (b) => req("/api/bank/verify", { method: "POST", body: b }),
 };
