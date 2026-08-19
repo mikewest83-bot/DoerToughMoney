@@ -9,7 +9,7 @@ import {
 // Everything needed to compute balances and render a group in one round trip.
 const GROUP_INCLUDE = {
   members: {
-    include: { user: { select: { id: true, name: true, handle: true, fundingSourceVerified: true, kycStatus: true } } },
+    include: { user: { select: { id: true, name: true, handle: true } } },
     orderBy: { createdAt: "asc" },
   },
   expenses: {
@@ -146,8 +146,10 @@ export async function addExpense({ groupId, paidByMemberId, amountCents, descrip
 
 export const deleteExpense = (expenseId) => prisma.expense.delete({ where: { id: expenseId } });
 
-export const recordSettlement = ({ groupId, fromMemberId, toMemberId, amountCents, transferId = null }) =>
-  prisma.settlement.create({ data: { groupId, fromMemberId, toMemberId, amountCents, transferId } });
+// A cash-record settlement only — DoerToughMoney doesn't move money, so
+// there's no transfer to link this to.
+export const recordSettlement = ({ groupId, fromMemberId, toMemberId, amountCents }) =>
+  prisma.settlement.create({ data: { groupId, fromMemberId, toMemberId, amountCents } });
 
 // ── recurring ────────────────────────────────────────────
 export async function addRecurring({ groupId, paidByMemberId, amountCents, description, splitMode, interval, dayOfMonth, dayOfWeek }) {
@@ -333,8 +335,6 @@ export function shapeGroup(group, viewerUserId, { lastReminded = {} } = {}) {
     fromName: memberLabel(byId[t.fromMemberId] ?? {}),
     toName: memberLabel(byId[t.toMemberId] ?? {}),
     amount: t.amountCents / 100,
-    // Whether a real transfer is possible, or only a cash record.
-    canTransfer: !!(byId[t.fromMemberId]?.user?.fundingSourceVerified && byId[t.toMemberId]?.user?.fundingSourceVerified),
   });
 
   return {
@@ -344,7 +344,6 @@ export function shapeGroup(group, viewerUserId, { lastReminded = {} } = {}) {
     members: group.members.map((m) => ({
       id: m.id, name: memberLabel(m), handle: m.user?.handle ?? null,
       pending: !m.userId, isMe: m.userId === viewerUserId,
-      canReceive: !!m.user?.fundingSourceVerified,
       net: (net[m.id] ?? 0) / 100,
     })),
     // What the caller should pay / expect, plus the whole group's picture.
