@@ -1,4 +1,21 @@
-# even — P2P payments (full stack)
+# DoerToughMoney (formerly "even")
+
+> **Everything below this notice is pre-pivot and describes the old P2P
+> payments product (Stripe, then Dwolla bank-to-bank transfers). See
+> `CHANGES.md`'s top entries for what actually changed. The short version:**
+> DoerToughMoney is no longer a payments app. It doesn't send or hold anyone
+> else's money. It's a personal finance app — linked bank accounts and
+> transactions (via Plaid), bills, budgets, and goals — with DealTough's
+> savings/negotiation AI as an integrated feature rather than a separate app.
+> Shared/group expense tracking is kept, but settling up records a cash
+> payoff, not a transfer.
+>
+> **Both the backend (`server/`) and frontend (`web/`) now reflect this
+> pivot.** The frontend was rewritten to match the new API surface — no more
+> Pay/Request/identity-verification/dispute UI; the app now has Home,
+> Accounts (Plaid), Transactions, Bills, Budgets, Goals, Insights, and a
+> DealTough tab, plus the existing Shared/group-expense screens with a
+> cash-only settle flow. See `CHANGES.md`.
 
 A working Venmo-style app: real accounts, a Postgres wallet ledger, and Stripe
 Connect for funding and cash-outs. The peer-to-peer transfer is an atomic move
