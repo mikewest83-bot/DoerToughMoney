@@ -7,30 +7,6 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum KycStatus {
-  PENDING
-  VERIFIED
-  RETRY
-  DOCUMENT
-  SUSPENDED
-}
-
-enum TransferStatus {
-  PENDING
-  POSTED
-  FAILED
-  RETURNED
-}
-
-// STANDARD  — plain ACH both legs: ~3-4 business days to debit, 1-2 to credit.
-// EXPRESS   — Same Day ACH on the debit, and Instant Payments (RTP/FedNow) on
-//             the credit when the recipient's bank supports it, else Same Day
-//             ACH there too. Carries the expedite fee.
-enum TransferSpeed {
-  STANDARD
-  EXPRESS
-}
-
 enum GroupType {
   HOUSEHOLD
   TRIP
@@ -48,42 +24,43 @@ enum RecurrenceInterval {
   MONTHLY
 }
 
-enum DisputeStatus {
-  FILED
-  INVESTIGATING
-  PROVISIONAL_CREDIT_ISSUED
-  RESOLVED_UPHELD
-  RESOLVED_DENIED
+// A Plaid Item's own health, surfaced from ITEM_LOGIN_REQUIRED / error
+// webhooks so the UI can prompt a reconnect instead of silently going stale.
+enum PlaidItemStatus {
+  ACTIVE
+  ERROR
+  REAUTH_REQUIRED
+}
+
+enum BillCadence {
+  WEEKLY
+  MONTHLY
+  YEARLY
+  UNKNOWN
 }
 
 model User {
-  id                    String    @id @default(cuid())
-  name                  String
-  handle                String    @unique
-  email                 String    @unique
+  id           String   @id @default(cuid())
+  name         String
+  handle       String   @unique
+  email        String   @unique
   // Null for a Google-only account — nothing to type in, so nothing to hash.
-  passwordHash          String?
+  passwordHash String?
   // Google's `sub` claim. Set on Google sign-up, or on first Google sign-in for
   // an existing password account whose email Google has verified matches.
-  googleId              String?   @unique
-  dwollaCustomerUrl     String?   @unique
-  kycStatus             KycStatus @default(PENDING)
-  fundingSourceUrl      String?
-  fundingSourceVerified Boolean   @default(false)
-  // Processing channels the linked bank supports, straight from Dwolla, e.g.
-  // ["ach"] or ["ach","real-time-payments"]. Presence of real-time-payments
-  // means this account can receive Instant Payments.
-  fundingSourceChannels String[]  @default([])
-  createdAt             DateTime  @default(now())
+  googleId     String?  @unique
+  createdAt    DateTime @default(now())
 
-  sentTransfers     Transfer[] @relation("sender")
-  receivedTransfers Transfer[] @relation("recipient")
-  sentRequests      Request[]  @relation("payer")
-  receivedRequests  Request[]  @relation("requester")
-  disputes          Dispute[]
-  groupMemberships  GroupMember[]
-  createdGroups     Group[]
-  credentials       Credential[]
+  groupMemberships GroupMember[]
+  createdGroups    Group[]
+  credentials      Credential[]
+
+  plaidItems   PlaidItem[]
+  accounts     Account[]
+  transactions Transaction[]
+  bills        Bill[]
+  budgets      Budget[]
+  goals        Goal[]
 }
 
 // A passkey (WebAuthn credential) enrolled on one of this user's devices.
@@ -104,83 +81,144 @@ model Credential {
   @@index([userId])
 }
 
-// even's record of money movement. No in-app spendable balance — funds live
-// in users' own banks; this is an auditable transfer + fee record, not custody.
-// Status is always driven by Dwolla events (webhook / reconcile), never guessed.
-model Transfer {
-  id             String         @id @default(cuid())
-  idempotencyKey String         @unique
-  providerRef    String         @unique // Dwolla transfer id (matches webhook resourceId)
-  providerUrl    String                  // full Dwolla transfer URL (for reconcile)
-  senderId       String
-  recipientId    String
-  sender         User           @relation("sender", fields: [senderId], references: [id])
-  recipient      User           @relation("recipient", fields: [recipientId], references: [id])
-  amountCents    Int
-  // Total facilitator fee charged to the sender (platform + expedite).
-  feeCents       Int            @default(0)
-  // The portion of feeCents that was for faster delivery, for reporting.
-  expediteFeeCents Int          @default(0)
-  feeCollected   Boolean        @default(false)
-  note           String?
-  speed          TransferSpeed  @default(STANDARD)
-  status         TransferStatus @default(PENDING)
-  createdAt      DateTime       @default(now())
-  updatedAt      DateTime       @updatedAt
-  disputes       Dispute[]
-  settlement     Settlement?
+// ── DoerToughMoney: linked banks, balances, transactions ────
+// One PlaidItem per bank login (Plaid's unit of a linked institution); each
+// Item can expose several Accounts (checking, savings, credit card, ...).
+model PlaidItem {
+  id              String          @id @default(cuid())
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  plaidItemId     String          @unique // Plaid's item_id
+  // Plaid access_token for this Item. TODO before going live with real user
+  // data: encrypt this at rest (e.g. envelope-encrypt with a KMS key) rather
+  // than storing it as plaintext — it's a bearer credential for the user's
+  // bank data for as long as the Item stays connected.
+  accessToken     String
+  institutionId   String?
+  institutionName String?
+  // Flipped to REAUTH_REQUIRED by Plaid's ITEM_LOGIN_REQUIRED webhook (bank
+  // password changed, MFA expired) so the UI can prompt a reconnect instead of
+  // silently failing every subsequent sync.
+  status          PlaidItemStatus @default(ACTIVE)
+  // Cursor for Plaid's /transactions/sync — persisted between syncs so each
+  // call only fetches what changed since last time instead of the full history.
+  transactionsCursor String?
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
 
-  @@index([senderId])
-  @@index([recipientId])
-}
+  accounts Account[]
 
-// Regulation E dispute record. Reg E imposes hard deadlines on consumer EFT
-// disputes: investigate within 10 business days, or issue provisional credit
-// and take up to 45 calendar days total. investigationDueAt/finalDueAt encode
-// those deadlines so the daily sweep in dwolla/disputes.js can enforce them.
-model Dispute {
-  id                  String        @id @default(cuid())
-  transferId          String
-  transfer            Transfer      @relation(fields: [transferId], references: [id])
-  userId              String
-  user                User          @relation(fields: [userId], references: [id])
-  amountCents         Int
-  reason              String
-  status              DisputeStatus @default(FILED)
-  filedAt             DateTime      @default(now())
-  investigationDueAt  DateTime      // filedAt + 10 business days
-  provisionalCreditAt DateTime?     // set when provisional credit is issued
-  finalDueAt          DateTime?     // filedAt + 45 calendar days
-  resolvedAt          DateTime?
-  resolutionNote      String?
-  createdAt           DateTime      @default(now())
-  updatedAt           DateTime      @updatedAt
-
-  @@index([transferId])
   @@index([userId])
-  @@index([status])
 }
 
-// A non-money "please pay me" note. No Dwolla involvement — purely informational
-// until the requester follows up with an actual Pay.
-model Request {
-  id          String   @id @default(cuid())
-  payerId     String
-  requesterId String
-  payer       User     @relation("payer", fields: [payerId], references: [id])
-  requester   User     @relation("requester", fields: [requesterId], references: [id])
-  amountCents Int
-  note        String?
-  createdAt   DateTime @default(now())
+model Account {
+  id                     String    @id @default(cuid())
+  userId                 String
+  user                   User      @relation(fields: [userId], references: [id])
+  plaidItemId            String
+  plaidItem              PlaidItem @relation(fields: [plaidItemId], references: [id], onDelete: Cascade)
+  plaidAccountId         String    @unique
+  name                   String
+  officialName           String?
+  mask                   String? // last 4 digits, for display
+  // Plaid's own account_type: "depository" | "credit" | "loan" | "investment" | "other"
+  type                   String
+  subtype                String? // e.g. "checking", "savings", "credit card"
+  currentBalanceCents    Int?
+  availableBalanceCents  Int?
+  isoCurrencyCode        String    @default("USD")
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
-  @@index([payerId])
-  @@index([requesterId])
+  transactions Transaction[]
+
+  @@index([userId])
+  @@index([plaidItemId])
+}
+
+// A recurring, known expense — rent, insurance, subscriptions — either
+// auto-detected from transaction history or entered by hand. This is the
+// anchor point for the DealTough integration: "this bill looks negotiable"
+// hangs off a Bill, not a raw transaction, so a suggestion survives even as
+// new matching transactions come in month to month.
+model Bill {
+  id           String      @id @default(cuid())
+  userId       String
+  user         User        @relation(fields: [userId], references: [id])
+  name         String
+  category     String?
+  amountCents  Int // typical/estimated amount
+  cadence      BillCadence @default(UNKNOWN)
+  nextDueOn    DateTime?
+  // True when this row was created by the recurring-bill detector matching
+  // repeated transactions, rather than entered by hand.
+  autoDetected Boolean     @default(false)
+  active       Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  transactions Transaction[]
+
+  @@index([userId])
+}
+
+model Transaction {
+  id                 String   @id @default(cuid())
+  userId             String
+  user               User     @relation(fields: [userId], references: [id])
+  accountId          String
+  account            Account  @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  // Null for a manually-entered transaction; set for anything synced from Plaid.
+  plaidTransactionId String?  @unique
+  // Plaid convention: positive = money OUT of the account, negative = money IN.
+  amountCents        Int
+  isoCurrencyCode    String   @default("USD")
+  date               DateTime
+  name               String // raw description from the bank/Plaid
+  merchantName       String?
+  category           String? // Plaid's top-level personal-finance category
+  pending            Boolean  @default(false)
+  billId             String?
+  bill               Bill?    @relation(fields: [billId], references: [id])
+  createdAt          DateTime @default(now())
+
+  @@index([userId, date])
+  @@index([accountId])
+  @@index([billId])
+}
+
+model Budget {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  category          String
+  monthlyLimitCents Int
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([userId, category])
+  @@index([userId])
+}
+
+model Goal {
+  id           String    @id @default(cuid())
+  userId       String
+  user         User      @relation(fields: [userId], references: [id])
+  name         String
+  targetCents  Int
+  currentCents Int       @default(0)
+  targetDate   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([userId])
 }
 
 // ── shared expenses ──────────────────────────────────────
-// A household, trip, team, or an implicit 2-person pair. Debts here are tracked
-// data, not custody: even never holds the money. Balances are computed from
-// expenses and settlements (see groups.js) and squared up with a real transfer.
+// A household, trip, team, or an implicit 2-person pair. Debts here are
+// tracked data, not custody — DoerToughMoney never holds or moves anyone
+// else's money. Balances are computed from expenses and settlements (see
+// groups.js) and squared up with a cash record, not a bank transfer.
 model Group {
   id          String    @id @default(cuid())
   name        String
@@ -192,9 +230,9 @@ model Group {
   implicit    Boolean   @default(false)
   createdAt   DateTime  @default(now())
 
-  members    GroupMember[]
-  expenses   Expense[]
-  recurring  RecurringExpense[]
+  members     GroupMember[]
+  expenses    Expense[]
+  recurring   RecurringExpense[]
   settlements Settlement[]
   reminders   Reminder[]
 
@@ -216,13 +254,13 @@ model GroupMember {
   joinedAt    DateTime?
   createdAt   DateTime  @default(now())
 
-  paidExpenses     Expense[]      @relation("paidBy")
-  shares           ExpenseShare[]
-  paidRecurring    RecurringExpense[] @relation("recurringPaidBy")
-  settlementsFrom  Settlement[]   @relation("settleFrom")
-  settlementsTo    Settlement[]   @relation("settleTo")
-  remindersSent     Reminder[]    @relation("remindFrom")
-  remindersReceived Reminder[]    @relation("remindTo")
+  paidExpenses      Expense[]          @relation("paidBy")
+  shares            ExpenseShare[]
+  paidRecurring     RecurringExpense[] @relation("recurringPaidBy")
+  settlementsFrom   Settlement[]       @relation("settleFrom")
+  settlementsTo     Settlement[]       @relation("settleTo")
+  remindersSent     Reminder[]         @relation("remindFrom")
+  remindersReceived Reminder[]         @relation("remindTo")
 
   @@unique([groupId, userId])
   @@unique([groupId, inviteEmail])
@@ -269,7 +307,7 @@ model ExpenseShare {
 }
 
 // Rent on the 1st, Netflix monthly. Materialized into Expense rows by the daily
-// job in recurring.js so nobody re-enters rent every month.
+// job in recurring.js so nobody re-enters them every month.
 model RecurringExpense {
   id             String             @id @default(cuid())
   groupId        String
@@ -292,9 +330,8 @@ model RecurringExpense {
   @@index([active, nextRunOn])
 }
 
-// Either a real transfer through even, or a record that two people squared up in
-// cash. Both have to reduce the balance, which is why this isn't just a flag on
-// Transfer — cash settlements have no transfer at all.
+// A cash record of two members squaring up — DoerToughMoney doesn't move
+// money on anyone's behalf, so this is bookkeeping only, not a transfer.
 model Settlement {
   id           String      @id @default(cuid())
   groupId      String
@@ -304,17 +341,15 @@ model Settlement {
   toMemberId   String
   toMember     GroupMember @relation("settleTo", fields: [toMemberId], references: [id])
   amountCents  Int
-  transferId   String?     @unique
-  transfer     Transfer?   @relation(fields: [transferId], references: [id])
   createdAt    DateTime    @default(now())
 
   @@index([groupId])
 }
 
 // A nudge from someone who is owed money to the person who owes it. Delivered
-// in-app only — even sends nothing outbound on a user's behalf. amountCents is
-// snapshotted at send time so the reminder still reads truthfully later, even
-// after the underlying balance moves.
+// in-app only — DoerToughMoney sends nothing outbound on a user's behalf.
+// amountCents is snapshotted at send time so the reminder still reads
+// truthfully later, even after the underlying balance moves.
 model Reminder {
   id           String      @id @default(cuid())
   groupId      String
@@ -334,9 +369,8 @@ model Reminder {
   @@index([fromMemberId, toMemberId, createdAt])
 }
 
-// Makes mutating money endpoints safe to retry: a client sends an
-// Idempotency-Key header; the same key replays the stored response
-// instead of moving money twice.
+// Makes mutating routes safe to retry: a client sends an Idempotency-Key
+// header; the same key replays the stored response instead of double-posting.
 model IdempotencyKey {
   id        String   @id @default(cuid())
   key       String
@@ -347,4 +381,3 @@ model IdempotencyKey {
 
   @@unique([userId, key])
 }
-
