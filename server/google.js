@@ -1,5 +1,5 @@
 // google.js — verifies Google Identity Services ID tokens server-side.
-// Built lazily, same pattern as dwolla/client.js: the app boots fine without
+// Built lazily, same pattern as plaid/client.js: the app boots fine without
 // GOOGLE_CLIENT_ID configured, and only the Google sign-in routes fail with a
 // clear error until it's set. Only a Client ID is needed — this verifies an
 // ID token Google already signed, not the authorization-code flow, so there's
