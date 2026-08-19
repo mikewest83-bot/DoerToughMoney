@@ -27,6 +27,41 @@ const DEALTOUGH_API_URL = process.env.DEALTOUGH_API_URL; // e.g. https://dealtou
 export const dealtoughConfigured = () => !!DEALTOUGH_API_URL;
 
 /**
+ * DealTough's Comparable is {price, similarity?, source?, sold?,
+ * distanceMiles?, condition?} — but callers naturally reach for a plain
+ * array of numbers ([1200, 1350, 1180]). Number.isFinite(c.price) is false
+ * for a bare number (c.price is undefined), so every comparable silently
+ * failed validation and DealTough's engine saw zero usable comps —
+ * valuationBasis came back "unknown" on every single analysis, no matter
+ * how good the input was.
+ *
+ * This accepts numbers, numeric strings, or {price, ...} objects, and drops
+ * (rather than zero-coerces) anything blank/null/non-positive — a blank
+ * comparable becoming a false $0 comp is worse than just not counting it,
+ * since it drags every valuation down.
+ */
+export function normalizeDealInput(dealInput) {
+  const input = dealInput && typeof dealInput === "object" ? dealInput : {};
+  const rawComparables = Array.isArray(input.comparables) ? input.comparables : [];
+
+  const comparables = rawComparables
+    .map((c) => {
+      if (typeof c === "number" || typeof c === "string") {
+        const price = Number(c);
+        return Number.isFinite(price) && price > 0 ? { price } : null;
+      }
+      if (c && typeof c === "object") {
+        const price = Number(c.price);
+        return Number.isFinite(price) && price > 0 ? { ...c, price } : null;
+      }
+      return null;
+    })
+    .filter(Boolean);
+
+  return { ...input, comparables };
+}
+
+/**
  * Call DealTough's real analyzer for a one-time purchase decision.
  * @param {object} dealInput  DealTough's DealInput shape — category, title,
  *   askingPrice, comparables, etc. (see DealTough's src/types.ts)
@@ -39,7 +74,7 @@ export async function analyzeDeal(dealInput) {
   const res = await fetch(`${DEALTOUGH_API_URL}/api/v1/deals/analyze`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(dealInput),
+    body: JSON.stringify(normalizeDealInput(dealInput)),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
