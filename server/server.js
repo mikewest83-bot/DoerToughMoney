@@ -6,7 +6,7 @@ import "express-async-errors"; // route async throws reach the error handler bel
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
-import { register, login, googleAuth, registerWithGoogle, verifyIdentity, authRequired, publicUser } from "./auth.js";
+import { register, login, googleAuth, registerWithGoogle, authRequired, publicUser } from "./auth.js";
 import { googleConfigured } from "./google.js";
 import {
   registrationOptions as passkeyRegOptions, registrationVerify as passkeyRegVerify,
@@ -14,22 +14,10 @@ import {
   listCredentials as passkeyList,
 } from "./webauthn.js";
 import prisma, {
-  getUserById, getUserByHandle, searchUsers, feedForUser, logRequest,
-  setFundingSource, setFundingSourceVerified, setKycStatusByCustomerUrlSuffix,
+  getUserById, getUserByHandle, searchUsers,
 } from "./db.js";
-import {
-  dwollaWebhook, addBankManual, initiateMicroDeposits, verifyMicroDeposits,
-  startReconcileCron, startDisputeDeadlineCron, issueProvisionalCredit,
-  fileDispute, makeCreditFlows, getFundingSourceChannels, supportsInstant,
-  createExchangeSession, getSessionToken, createExchange, addBankViaExchange,
-} from "./dwolla/index.js";
-import { idempotency } from "./idempotency.js";
-import { validateAmount, shapeTxn } from "./logic.js";
-import {
-  validateProductionConfig, feeParams, dwollaConfigured,
-  expediteFeeParams, expediteOffered, instantLinkEnabled,
-} from "./config.js";
-import { sendMoney, PaymentError, transferBlockedReason, canSendInstantly } from "./payments.js";
+import { validateProductionConfig, plaidConfigured } from "./config.js";
+import { validateAmount } from "./logic.js";
 import {
   getGroup, listGroupsForUser, memberFor, createGroup, addMember, removeMember,
   addExpense, deleteExpense, recordSettlement, addRecurring, deactivateRecurring,
@@ -38,6 +26,15 @@ import {
 } from "./groupsdb.js";
 import { MAX_DAY_OF_MONTH } from "./groups.js";
 import { startRecurringExpenseCron } from "./recurring.js";
+import { idempotency } from "./idempotency.js";
+import { createLinkToken, exchangePublicToken, removeItem as removePlaidItem } from "./plaid/link.js";
+import { syncItem, syncAllForUser } from "./plaid/sync.js";
+import { plaidWebhook } from "./plaid/webhook.js";
+import {
+  spendingByCategory, periodSummary, monthOverMonth, topNegotiableBills,
+  totalAvailableCents, totalDebtCents, budgetStatus, goalProgress,
+} from "./insights.js";
+import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
 
 validateProductionConfig();
 
@@ -45,23 +42,16 @@ const app = express();
 app.set("trust proxy", 1); // behind Railway's proxy — needed for correct rate-limit IPs
 app.use(cors({ origin: process.env.WEB_ORIGIN || "http://localhost:5173" }));
 
-// Dwolla webhook needs the RAW body, so mount it BEFORE express.json() and the limiter.
+// Plaid webhook needs the raw body to verify the SHA-256 the signing JWT
+// carries, so it's captured via express.json()'s verify hook rather than a
+// separate express.raw() mount (Plaid signs the parsed-JSON body's hash, not
+// the raw bytes the way Dwolla did).
 app.post(
-  "/webhooks/dwolla",
-  express.raw({ type: "application/json" }),
-  dwollaWebhook(prisma, {
-    onCustomerVerified: async (dwollaCustomerId) => {
-      await setKycStatusByCustomerUrlSuffix(dwollaCustomerId, "VERIFIED");
-    },
-    onDocumentNeeded: async (dwollaCustomerId) => {
-      await setKycStatusByCustomerUrlSuffix(dwollaCustomerId, "DOCUMENT");
-    },
-    onReauthRequired: async (exchangeId) => {
-      // The user's bank connection needs re-authentication; their payments will
-      // fail until they relink. No user-facing prompt yet — see README.
-      console.error(`[open-banking] REAUTH REQUIRED for exchange ${exchangeId} — user must reconnect their bank.`);
-    },
-  })
+  "/webhooks/plaid",
+  express.json({
+    verify: (req, _res, buf) => { req.rawBodyForPlaid = buf; },
+  }),
+  plaidWebhook(prisma)
 );
 
 app.use(express.json());
@@ -72,29 +62,22 @@ const limit = (max, message) =>
 
 const apiLimiter = limit(120, "Too many requests. Give it a minute.");
 const authLimiter = limit(12, "Too many attempts. Wait a minute and try again.");
-const moneyLimiter = limit(30, "Slow down a moment and try again.");
+// Bank linking and sync hit Plaid's own API, so they get a tighter budget
+// than ordinary reads.
+const plaidLimiter = limit(20, "Slow down a moment and try again.");
 // Ledger writes don't move money but they do mutate shared state other people
 // see, so they get their own budget rather than only the broad API limit.
 const ledgerLimiter = limit(60, "Slow down a moment and try again.");
 
 app.use("/api", apiLimiter);
 
-// Public: lets the client preview fees before a payment.
+// Public: lets the client know which optional features are wired up.
 app.get("/api/config", (_req, res) => {
-  const { bps, flatCents, capCents } = feeParams();
-  const ex = expediteFeeParams();
   res.json({
-    feeBps: bps, feeFlatCents: flatCents, feeCapCents: Number.isFinite(capCents) ? capCents : null,
-    expediteOffered: expediteOffered(),
-    expediteFeeBps: ex.bps, expediteFeeFlatCents: ex.flatCents,
-    expediteFeeCapCents: Number.isFinite(ex.capCents) ? ex.capCents : null,
-    // Lets the client lead with instant bank linking instead of the slow
-    // manual routing/account form.
-    instantLinkEnabled: instantLinkEnabled(),
-    // Gates the "Sign in with Google" button — no point rendering it before
-    // GOOGLE_CLIENT_ID is configured.
     googleEnabled: googleConfigured(),
     googleClientId: googleConfigured() ? process.env.GOOGLE_CLIENT_ID : null,
+    plaidEnabled: plaidConfigured(),
+    dealtoughEnabled: dealtoughConfigured(),
   });
 });
 
@@ -119,126 +102,316 @@ app.get("/api/me", authRequired, (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
-app.get("/api/feed", authRequired, async (req, res) => {
-  const rows = (await feedForUser(req.user.id)).map((t) => shapeTxn(t, req.user.id));
-  res.json({ feed: rows });
-});
-
 app.get("/api/users", authRequired, async (req, res) => {
   const q = (req.query.q || "").toString().trim();
-  const users = (await searchUsers(q, req.user.id)).map((u) => ({
-    id: u.id, name: u.name, handle: u.handle,
-    canReceive: u.fundingSourceVerified,
-    // Drives the express option's copy: only claim "instant" when the transfer
-    // can genuinely ride RTP, otherwise express is same-business-day.
-    instantEligible: canSendInstantly(u),
-  }));
+  const users = (await searchUsers(q, req.user.id)).map((u) => ({ id: u.id, name: u.name, handle: u.handle }));
   res.json({ users });
 });
 
-// ── complete identity verification (pre-migration accounts) ──
-app.post("/api/verify-identity", authRequired, moneyLimiter, verifyIdentity);
-
-// ── link a bank instantly (Dwolla Open Banking / Plaid IAV) ──
-// Two calls: start a session to get a Link token for the browser, then hand
-// back what Link returns. The funding source is verified on creation, so
-// there's no micro-deposit wait and the user can send money right away.
-app.post("/api/bank/link/start", authRequired, moneyLimiter, async (req, res) => {
-  if (!instantLinkEnabled()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
-  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
-
-  // Sessions are single-use, so every attempt starts a fresh one.
-  try {
-    const sessionUrl = await createExchangeSession(req.user.dwollaCustomerUrl);
-    res.json({ linkToken: await getSessionToken(sessionUrl) });
-  } catch (e) {
-    // Open Banking scopes not granted on this Dwolla account yet — tell the
-    // client plainly so it can fall back to manual entry instead of 500ing.
-    if (e?.body?.code === "InvalidScope" || e?.status === 401) {
-      console.error("[open-banking] exchange session rejected — Open Banking scopes are not enabled on this Dwolla account.");
-      return res.status(503).json({ error: "Instant bank linking isn't available yet. Please enter your account details instead." });
-    }
-    throw e;
-  }
+// ── linked banks (Plaid) ──────────────────────────────────
+app.post("/api/plaid/link-token", authRequired, plaidLimiter, async (req, res) => {
+  if (!plaidConfigured()) return res.status(503).json({ error: "Bank linking isn't available right now." });
+  // PLAID_WEBHOOK_URL should point at this service's own /webhooks/plaid,
+  // e.g. https://<your-app>.up.railway.app/webhooks/plaid — set once the
+  // service has a public domain, so Plaid can push updates instead of the
+  // app relying solely on the manual /api/plaid/sync refresh.
+  const linkToken = await createLinkToken(req.user.id, process.env.PLAID_WEBHOOK_URL);
+  res.json({ linkToken });
 });
 
-app.post("/api/bank/link/complete", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  if (!instantLinkEnabled()) return res.status(503).json({ error: "Instant bank linking isn't available right now." });
-  const { publicToken, bankAccountType, name } = req.body || {};
-  if (!publicToken) return res.status(400).json({ error: "Bank connection was incomplete. Please try again." });
-  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
+app.post("/api/plaid/exchange", authRequired, plaidLimiter, idempotency, async (req, res) => {
+  if (!plaidConfigured()) return res.status(503).json({ error: "Bank linking isn't available right now." });
+  const { publicToken } = req.body || {};
+  if (!publicToken) return res.status(400).json({ error: "Missing publicToken." });
 
-  const exchangeUrl = await createExchange(req.user.dwollaCustomerUrl, publicToken);
-  const fundingSourceUrl = await addBankViaExchange(req.user.dwollaCustomerUrl, exchangeUrl, {
-    bankAccountType: bankAccountType === "savings" ? "savings" : "checking",
-    name: String(name || "Bank").slice(0, 50),
+  const { accessToken, plaidItemId, institutionId, institutionName } = await exchangePublicToken(publicToken);
+  const item = await prisma.plaidItem.create({
+    data: { userId: req.user.id, plaidItemId, accessToken, institutionId, institutionName },
   });
 
-  // Verified on creation — record it as such, along with the processing
-  // channels that decide whether express payments here can ride Instant Payments.
-  const channels = await getFundingSourceChannels(fundingSourceUrl).catch(() => ["ach"]);
-  await setFundingSource(req.user.id, fundingSourceUrl);
-  await setFundingSourceVerified(req.user.id, channels);
-  res.json({ user: publicUser(await getUserById(req.user.id)) });
+  // Pull the first batch of accounts/transactions right away so the UI has
+  // something to show without waiting on the async webhook.
+  const result = await syncItem(prisma, item).catch((e) => {
+    console.error("[plaid] initial sync failed:", e?.response?.data || e.message);
+    return null;
+  });
+
+  res.status(201).json({ plaidItemId: item.id, institutionName, synced: result });
 });
 
-// ── link a bank (manual routing/account + micro-deposits) ──
-app.post("/api/bank/link", authRequired, moneyLimiter, async (req, res) => {
-  const { routingNumber, accountNumber, bankAccountType, name } = req.body || {};
-  if (!routingNumber || !accountNumber || !bankAccountType)
-    return res.status(400).json({ error: "Routing number, account number, and account type are required." });
-  if (!req.user.dwollaCustomerUrl) return res.status(400).json({ error: "Finish identity verification first." });
+app.get("/api/plaid/items", authRequired, async (req, res) => {
+  const items = await prisma.plaidItem.findMany({
+    where: { userId: req.user.id },
+    select: { id: true, institutionName: true, status: true, createdAt: true },
+    orderBy: { createdAt: "desc" },
+  });
+  res.json({ items });
+});
 
-  const fundingSourceUrl = await addBankManual(req.user.dwollaCustomerUrl, { routingNumber, accountNumber, bankAccountType, name });
-  await initiateMicroDeposits(fundingSourceUrl);
-  await setFundingSource(req.user.id, fundingSourceUrl);
+app.delete("/api/plaid/items/:id", authRequired, plaidLimiter, async (req, res) => {
+  const item = await prisma.plaidItem.findUnique({ where: { id: req.params.id } });
+  if (!item || item.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+  await removePlaidItem(item.accessToken).catch((e) => console.error("[plaid] itemRemove failed:", e?.response?.data || e.message));
+  await prisma.plaidItem.delete({ where: { id: item.id } }); // cascades to Account -> Transaction
   res.json({ ok: true });
 });
 
-// ── verify a bank via the two micro-deposit amounts ─────────
-app.post("/api/bank/verify", authRequired, moneyLimiter, async (req, res) => {
-  const { amount1, amount2 } = req.body || {};
-  const a1 = validateAmount(amount1);
-  const a2 = validateAmount(amount2);
-  if (!a1.ok || !a2.ok) return res.status(400).json({ error: "Enter both micro-deposit amounts." });
-  if (!req.user.fundingSourceUrl) return res.status(400).json({ error: "Link a bank account first." });
-
-  try {
-    await verifyMicroDeposits(req.user.fundingSourceUrl, a1.cents, a2.cents);
-  } catch {
-    return res.status(400).json({ error: "Those amounts don't match. Check your bank statement and try again." });
-  }
-  // Record which processing channels this bank supports — it decides whether
-  // express payments to this user can ride Instant Payments or Same Day ACH.
-  const channels = await getFundingSourceChannels(req.user.fundingSourceUrl).catch(() => ["ach"]);
-  await setFundingSourceVerified(req.user.id, channels);
-  res.json({ user: publicUser(await getUserById(req.user.id)) });
+app.post("/api/plaid/sync", authRequired, plaidLimiter, async (req, res) => {
+  if (!plaidConfigured()) return res.status(503).json({ error: "Bank linking isn't available right now." });
+  const results = await syncAllForUser(prisma, req.user.id);
+  res.json({ results });
 });
 
-// ── pay (real bank-to-bank transfer via Dwolla) ─────────────
-app.post("/api/pay", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const { handle, amount, note, speed: requestedSpeed } = req.body || {};
+// ── accounts & balances ───────────────────────────────────
+app.get("/api/accounts", authRequired, async (req, res) => {
+  const accounts = await prisma.account.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: "asc" } });
+  res.json({
+    accounts: accounts.map((a) => ({
+      id: a.id, name: a.name, officialName: a.officialName, mask: a.mask,
+      type: a.type, subtype: a.subtype,
+      currentBalance: (a.currentBalanceCents ?? 0) / 100,
+      availableBalance: a.availableBalanceCents != null ? a.availableBalanceCents / 100 : null,
+    })),
+    totalAvailable: totalAvailableCents(accounts) / 100,
+    totalDebt: totalDebtCents(accounts) / 100,
+  });
+});
+
+// ── transactions ──────────────────────────────────────────
+app.get("/api/transactions", authRequired, async (req, res) => {
+  const { from, to, category, limit: limitRaw } = req.query;
+  const where = { userId: req.user.id };
+  if (from || to) where.date = { ...(from && { gte: new Date(from) }), ...(to && { lte: new Date(to) }) };
+  if (category) where.category = category;
+
+  const take = Math.min(Number.parseInt(limitRaw, 10) || 100, 500);
+  const transactions = await prisma.transaction.findMany({ where, orderBy: { date: "desc" }, take });
+  res.json({
+    transactions: transactions.map((t) => ({
+      id: t.id, accountId: t.accountId, amount: t.amountCents / 100, date: t.date,
+      name: t.name, merchantName: t.merchantName, category: t.category, pending: t.pending, billId: t.billId,
+    })),
+  });
+});
+
+app.patch("/api/transactions/:id", authRequired, ledgerLimiter, async (req, res) => {
+  const txn = await prisma.transaction.findUnique({ where: { id: req.params.id } });
+  if (!txn || txn.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+
+  const { category, billId } = req.body || {};
+  const data = {};
+  if (category !== undefined) data.category = category ? String(category).slice(0, 60) : null;
+  if (billId !== undefined) {
+    if (billId) {
+      const bill = await prisma.bill.findUnique({ where: { id: billId } });
+      if (!bill || bill.userId !== req.user.id) return res.status(400).json({ error: "That bill doesn't exist." });
+    }
+    data.billId = billId || null;
+  }
+  const updated = await prisma.transaction.update({ where: { id: txn.id }, data });
+  res.json({ transaction: { id: updated.id, category: updated.category, billId: updated.billId } });
+});
+
+// ── bills ─────────────────────────────────────────────────
+app.get("/api/bills", authRequired, async (req, res) => {
+  const bills = await prisma.bill.findMany({ where: { userId: req.user.id }, orderBy: { amountCents: "desc" } });
+  res.json({
+    bills: bills.map((b) => ({
+      id: b.id, name: b.name, category: b.category, amount: b.amountCents / 100,
+      cadence: b.cadence, nextDueOn: b.nextDueOn, autoDetected: b.autoDetected, active: b.active,
+    })),
+    // The candidates worth pointing at DealTough first — biggest recurring
+    // spend, so a percentage discount saves the most in real dollars.
+    topNegotiable: topNegotiableBills(bills).slice(0, 5).map((b) => ({ id: b.id, name: b.name, amount: b.amountCents / 100 })),
+  });
+});
+
+app.post("/api/bills", authRequired, ledgerLimiter, async (req, res) => {
+  const { name, category, amount, cadence, nextDueOn } = req.body || {};
   const v = validateAmount(amount);
   if (!v.ok) return res.status(400).json({ error: v.error });
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return res.status(400).json({ error: "Give the bill a name." });
 
-  const recipient = await getUserByHandle(handle);
-  if (!recipient) return res.status(404).json({ error: "No one with that handle." });
-
-  const result = await sendMoney({
-    sender: req.user, recipient, cents: v.cents, note, speed: requestedSpeed,
+  const bill = await prisma.bill.create({
+    data: {
+      userId: req.user.id, name: trimmed.slice(0, 80), category: category ? String(category).slice(0, 60) : null,
+      amountCents: v.cents,
+      cadence: ["WEEKLY", "MONTHLY", "YEARLY"].includes(cadence) ? cadence : "UNKNOWN",
+      nextDueOn: nextDueOn ? new Date(nextDueOn) : null,
+    },
   });
+  res.status(201).json({ bill: { id: bill.id, name: bill.name, amount: bill.amountCents / 100 } });
+});
+
+app.patch("/api/bills/:id", authRequired, ledgerLimiter, async (req, res) => {
+  const bill = await prisma.bill.findUnique({ where: { id: req.params.id } });
+  if (!bill || bill.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+
+  const { name, category, amount, cadence, nextDueOn, active } = req.body || {};
+  const data = {};
+  if (name !== undefined) data.name = String(name).trim().slice(0, 80);
+  if (category !== undefined) data.category = category ? String(category).slice(0, 60) : null;
+  if (amount !== undefined) {
+    const v = validateAmount(amount);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    data.amountCents = v.cents;
+  }
+  if (cadence !== undefined && ["WEEKLY", "MONTHLY", "YEARLY", "UNKNOWN"].includes(cadence)) data.cadence = cadence;
+  if (nextDueOn !== undefined) data.nextDueOn = nextDueOn ? new Date(nextDueOn) : null;
+  if (active !== undefined) data.active = !!active;
+
+  const updated = await prisma.bill.update({ where: { id: bill.id }, data });
+  res.json({ bill: { id: updated.id, name: updated.name, amount: updated.amountCents / 100, active: updated.active } });
+});
+
+app.delete("/api/bills/:id", authRequired, async (req, res) => {
+  const bill = await prisma.bill.findUnique({ where: { id: req.params.id } });
+  if (!bill || bill.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+  await prisma.bill.delete({ where: { id: bill.id } });
+  res.json({ ok: true });
+});
+
+// ── budgets ───────────────────────────────────────────────
+app.get("/api/budgets", authRequired, async (req, res) => {
+  const budgets = await prisma.budget.findMany({ where: { userId: req.user.id } });
+  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+  const spentByCategory = spendingByCategory(
+    await prisma.transaction.findMany({ where: { userId: req.user.id, date: { gte: monthStart } } })
+  );
+  const spentMap = Object.fromEntries(spentByCategory.map((c) => [c.category, c.cents]));
 
   res.json({
-    user: publicUser(req.user),
-    feeCents: result.feeCents, expediteFeeCents: result.expediteFeeCents,
-    amountCents: v.cents, speed: result.speed, usedInstant: result.usedInstant,
+    budgets: budgets.map((b) => {
+      const status = budgetStatus(b, spentMap[b.category] || 0);
+      return {
+        id: b.id, category: b.category, monthlyLimit: b.monthlyLimitCents / 100,
+        spent: status.spentCents / 100, remaining: status.remainingCents / 100,
+        overBudget: status.overBudget, percentUsed: status.percentUsed,
+      };
+    }),
   });
+});
+
+// Upsert by category — one budget per category per user.
+app.post("/api/budgets", authRequired, ledgerLimiter, async (req, res) => {
+  const { category, monthlyLimit } = req.body || {};
+  const trimmed = String(category || "").trim();
+  if (!trimmed) return res.status(400).json({ error: "Choose a category." });
+  const v = validateAmount(monthlyLimit);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+
+  const budget = await prisma.budget.upsert({
+    where: { userId_category: { userId: req.user.id, category: trimmed } },
+    create: { userId: req.user.id, category: trimmed, monthlyLimitCents: v.cents },
+    update: { monthlyLimitCents: v.cents },
+  });
+  res.status(201).json({ budget: { id: budget.id, category: budget.category, monthlyLimit: budget.monthlyLimitCents / 100 } });
+});
+
+app.delete("/api/budgets/:id", authRequired, async (req, res) => {
+  const budget = await prisma.budget.findUnique({ where: { id: req.params.id } });
+  if (!budget || budget.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+  await prisma.budget.delete({ where: { id: budget.id } });
+  res.json({ ok: true });
+});
+
+// ── goals ─────────────────────────────────────────────────
+app.get("/api/goals", authRequired, async (req, res) => {
+  const goals = await prisma.goal.findMany({ where: { userId: req.user.id }, orderBy: { createdAt: "asc" } });
+  res.json({
+    goals: goals.map((g) => ({
+      id: g.id, name: g.name, target: g.targetCents / 100, current: g.currentCents / 100,
+      targetDate: g.targetDate, percent: goalProgress(g),
+    })),
+  });
+});
+
+app.post("/api/goals", authRequired, ledgerLimiter, async (req, res) => {
+  const { name, target, targetDate } = req.body || {};
+  const trimmed = String(name || "").trim();
+  if (!trimmed) return res.status(400).json({ error: "Give the goal a name." });
+  const v = validateAmount(target);
+  if (!v.ok) return res.status(400).json({ error: v.error });
+
+  const goal = await prisma.goal.create({
+    data: { userId: req.user.id, name: trimmed.slice(0, 80), targetCents: v.cents, targetDate: targetDate ? new Date(targetDate) : null },
+  });
+  res.status(201).json({ goal: { id: goal.id, name: goal.name, target: goal.targetCents / 100 } });
+});
+
+app.patch("/api/goals/:id", authRequired, ledgerLimiter, async (req, res) => {
+  const goal = await prisma.goal.findUnique({ where: { id: req.params.id } });
+  if (!goal || goal.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+
+  const { name, target, current, targetDate } = req.body || {};
+  const data = {};
+  if (name !== undefined) data.name = String(name).trim().slice(0, 80);
+  if (target !== undefined) {
+    const v = validateAmount(target);
+    if (!v.ok) return res.status(400).json({ error: v.error });
+    data.targetCents = v.cents;
+  }
+  if (current !== undefined) {
+    const c = Math.round(Number(current) * 100);
+    if (!Number.isFinite(c) || c < 0) return res.status(400).json({ error: "Enter a valid amount." });
+    data.currentCents = c;
+  }
+  if (targetDate !== undefined) data.targetDate = targetDate ? new Date(targetDate) : null;
+
+  const updated = await prisma.goal.update({ where: { id: goal.id }, data });
+  res.json({ goal: { id: updated.id, name: updated.name, current: updated.currentCents / 100, target: updated.targetCents / 100 } });
+});
+
+app.delete("/api/goals/:id", authRequired, async (req, res) => {
+  const goal = await prisma.goal.findUnique({ where: { id: req.params.id } });
+  if (!goal || goal.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
+  await prisma.goal.delete({ where: { id: goal.id } });
+  res.json({ ok: true });
+});
+
+// ── insights ──────────────────────────────────────────────
+// "What's my financial trajectory": this month vs last month by category,
+// plus which bills are the best DealTough candidates.
+app.get("/api/insights", authRequired, async (req, res) => {
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+
+  const [currentTxns, previousTxns, bills] = await Promise.all([
+    prisma.transaction.findMany({ where: { userId: req.user.id, date: { gte: monthStart } } }),
+    prisma.transaction.findMany({ where: { userId: req.user.id, date: { gte: prevMonthStart, lt: monthStart } } }),
+    prisma.bill.findMany({ where: { userId: req.user.id } }),
+  ]);
+
+  const summary = periodSummary(currentTxns);
+  res.json({
+    thisMonth: { spend: summary.spendCents / 100, income: summary.incomeCents / 100, net: summary.netCents / 100 },
+    byCategory: spendingByCategory(currentTxns).map((c) => ({ category: c.category, amount: c.cents / 100 })),
+    monthOverMonth: monthOverMonth(currentTxns, previousTxns)
+      .slice(0, 10)
+      .map((c) => ({ category: c.category, current: c.currentCents / 100, previous: c.previousCents / 100, delta: c.deltaCents / 100 })),
+    topNegotiableBills: topNegotiableBills(bills).slice(0, 5).map((b) => ({ id: b.id, name: b.name, amount: b.amountCents / 100 })),
+  });
+});
+
+// ── DealTough integration ────────────────────────────────
+// "Should I buy this?" for a one-time purchase. Calls out to DealTough's own
+// deployment (see dealtough.js) — DoerToughMoney doesn't run this engine
+// itself. Recurring-bill negotiation isn't wired up yet; see dealtough.js.
+app.post("/api/dealtough/analyze", authRequired, ledgerLimiter, async (req, res) => {
+  if (!dealtoughConfigured()) return res.status(503).json({ error: "DealTough isn't connected right now." });
+  try {
+    const report = await analyzeDeal(req.body || {});
+    res.json(report);
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Couldn't analyze that." });
+  }
 });
 
 // ── shared expenses ──────────────────────────────────────
-// Debts are tracked data, not custody. Tracking needs no verification at all;
-// only settling with real money does — so a household can start the day it
-// signs up and verify later.
+// Debts are tracked data, not custody — DoerToughMoney never holds or moves
+// anyone else's money. Settling up records a cash payoff, not a transfer.
 
 // Loads the group and asserts the caller belongs to it. Every group route goes
 // through this, so membership can't be forgotten on one endpoint.
@@ -276,8 +449,8 @@ app.get("/api/groups/:id", authRequired, async (req, res) => {
   res.json({ group: shapeGroup(ctx.group, req.user.id, { lastReminded }) });
 });
 
-// Add by handle (they're already on even) or by email (creates a placeholder
-// that holds their share until they sign up).
+// Add by handle (they're already on DoerToughMoney) or by email (creates a
+// placeholder that holds their share until they sign up).
 app.post("/api/groups/:id/members", authRequired, ledgerLimiter, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
@@ -314,8 +487,8 @@ app.delete("/api/groups/:id/members/:memberId", authRequired, ledgerLimiter, asy
   const target = ctx.group.members.find((m) => m.id === req.params.memberId);
   if (!target) return res.status(404).json({ error: "That person isn't in this group." });
 
-  // Anyone could previously remove anyone. Removing others is limited to the
-  // group's creator; everyone else can only remove themselves (leave).
+  // Removing others is limited to the group's creator; everyone else can only
+  // remove themselves (leave).
   const isCreator = ctx.group.createdById === req.user.id;
   const isSelf = target.id === ctx.me.id;
   if (!isCreator && !isSelf)
@@ -329,7 +502,7 @@ app.delete("/api/groups/:id/members/:memberId", authRequired, ledgerLimiter, asy
 });
 
 // Idempotent because a duplicate expense silently corrupts every balance in the
-// group — the same reason the money routes carry it, even though no money moves.
+// group.
 app.post("/api/groups/:id/expenses", authRequired, ledgerLimiter, idempotency, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
@@ -366,8 +539,18 @@ app.post("/api/groups/:id/expenses", authRequired, ledgerLimiter, idempotency, a
 app.delete("/api/groups/:id/expenses/:expenseId", authRequired, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
-  if (!ctx.group.expenses.some((e) => e.id === req.params.expenseId))
-    return res.status(404).json({ error: "Expense not found in this group." });
+  const expense = ctx.group.expenses.find((e) => e.id === req.params.expenseId);
+  if (!expense) return res.status(404).json({ error: "Expense not found in this group." });
+
+  // Only whoever created it, whoever's marked as having paid it, or the
+  // group's creator can delete it — any member being able to erase anyone
+  // else's recorded expense was a standing authorization gap.
+  const isCreator = ctx.group.createdById === req.user.id;
+  const isExpenseCreator = expense.createdById === req.user.id;
+  const isPayer = expense.paidByMemberId === ctx.me.id;
+  if (!isCreator && !isExpenseCreator && !isPayer)
+    return res.status(403).json({ error: "Only whoever added or paid this expense (or the group's creator) can delete it." });
+
   await deleteExpense(req.params.expenseId);
   res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
 });
@@ -406,12 +589,13 @@ app.delete("/api/groups/:id/recurring/:recurringId", authRequired, async (req, r
   res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
 });
 
-// Square up. A real bank transfer when both sides are verified, otherwise a
-// record that they settled in cash — the ledger stays usable either way.
-app.post("/api/groups/:id/settle", authRequired, moneyLimiter, idempotency, async (req, res) => {
+// Square up. DoerToughMoney doesn't move money on anyone's behalf — this
+// records that two people settled in cash (or however they actually paid
+// each other), it doesn't initiate a transfer.
+app.post("/api/groups/:id/settle", authRequired, ledgerLimiter, idempotency, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
-  const { toMemberId, amount, method = "transfer", speed } = req.body || {};
+  const { toMemberId, amount } = req.body || {};
 
   const v = validateAmount(amount);
   if (!v.ok) return res.status(400).json({ error: v.error });
@@ -419,36 +603,14 @@ app.post("/api/groups/:id/settle", authRequired, moneyLimiter, idempotency, asyn
   if (!target) return res.status(404).json({ error: "That person isn't in this group." });
   if (target.id === ctx.me.id) return res.status(400).json({ error: "You can't settle with yourself." });
 
-  if (method === "cash") {
-    await recordSettlement({ groupId: ctx.group.id, fromMemberId: ctx.me.id, toMemberId: target.id, amountCents: v.cents });
-    return res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id), settledInCash: true });
-  }
-
-  if (!target.userId) return res.status(400).json({ error: `${target.inviteName || "They"} hasn't joined even yet — record it as cash for now.` });
-  const recipient = await getUserById(target.userId);
-  const blocked = transferBlockedReason(req.user, recipient);
-  if (blocked) return res.status(400).json({ error: `${blocked} You can record this as settled in cash instead.` });
-
-  // Settling a shared expense is moving money you already owe, so the platform
-  // fee doesn't apply — only the optional express upgrade the payer chose.
-  const result = await sendMoney({
-    sender: req.user, recipient, cents: v.cents,
-    note: `Settled up — ${ctx.group.name}`, speed, chargeFees: false,
-  });
-  await recordSettlement({
-    groupId: ctx.group.id, fromMemberId: ctx.me.id, toMemberId: target.id,
-    amountCents: v.cents, transferId: result.transfer.id,
-  });
-
-  res.json({
-    group: shapeGroup(await getGroup(ctx.group.id), req.user.id),
-    expediteFeeCents: result.expediteFeeCents, speed: result.speed, usedInstant: result.usedInstant,
-  });
+  await recordSettlement({ groupId: ctx.group.id, fromMemberId: ctx.me.id, toMemberId: target.id, amountCents: v.cents });
+  res.json({ group: shapeGroup(await getGroup(ctx.group.id), req.user.id) });
 });
 
 // ── reminders ────────────────────────────────────────────
-// Nudging is in-app only: even sends nothing outbound on a user's behalf. The
-// cooldown in groups.js is what keeps this from becoming a harassment tool.
+// Nudging is in-app only: DoerToughMoney sends nothing outbound on a user's
+// behalf. The cooldown in groups.js is what keeps this from becoming a
+// harassment tool.
 app.post("/api/groups/:id/remind", authRequired, async (req, res) => {
   const ctx = await requireMembership(req, res);
   if (!ctx) return;
@@ -475,7 +637,8 @@ app.post("/api/reminders/:reminderId/seen", authRequired, async (req, res) => {
 
 // Quick 1:1 "I covered this, you owe me half" — no group setup required. Runs
 // on the same engine via an implicit pair group, so the debt shows up in the
-// same balances and settles the same way.
+// same balances and settles the same way. No money moves — this is bookkeeping,
+// like every other shared-expense route.
 app.post("/api/split", authRequired, ledgerLimiter, idempotency, async (req, res) => {
   const { handle, amount, description, theirShare } = req.body || {};
   const v = validateAmount(amount);
@@ -513,63 +676,8 @@ app.post("/api/split", authRequired, ledgerLimiter, idempotency, async (req, res
   res.status(201).json({ group: shapeGroup(await getGroup(group.id), req.user.id) });
 });
 
-// ── disputes (Reg E) ─────────────────────────────────────
-// File a dispute on a transfer you were party to. The 10-business-day
-// investigation clock starts here; the daily sweep enforces the deadlines.
-app.post("/api/disputes", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const { transferId, reason } = req.body || {};
-  if (!transferId) return res.status(400).json({ error: "Which payment is this about?" });
-  const trimmedReason = String(reason || "").trim();
-  if (trimmedReason.length < 3) return res.status(400).json({ error: "Tell us briefly what went wrong." });
-
-  const transfer = await prisma.transfer.findUnique({ where: { id: transferId } });
-  if (!transfer) return res.status(404).json({ error: "Payment not found." });
-  if (transfer.senderId !== req.user.id && transfer.recipientId !== req.user.id)
-    return res.status(403).json({ error: "That isn't your payment." });
-
-  const already = await prisma.dispute.findFirst({
-    where: { transferId, userId: req.user.id, status: { notIn: ["RESOLVED_UPHELD", "RESOLVED_DENIED"] } },
-  });
-  if (already) return res.status(409).json({ error: "You already have an open dispute on this payment." });
-
-  const dispute = await fileDispute(prisma, {
-    transferId,
-    userId: req.user.id,
-    amountCents: transfer.amountCents,
-    reason: trimmedReason.slice(0, 500),
-  });
-  res.status(201).json({ dispute: shapeDispute(dispute) });
-});
-
-app.get("/api/disputes", authRequired, async (req, res) => {
-  const disputes = await prisma.dispute.findMany({
-    where: { userId: req.user.id },
-    orderBy: { filedAt: "desc" },
-    take: 50,
-  });
-  res.json({ disputes: disputes.map(shapeDispute) });
-});
-
-const shapeDispute = (d) => ({
-  id: d.id, transferId: d.transferId, status: d.status,
-  amount: d.amountCents / 100, reason: d.reason,
-  filedAt: d.filedAt, resolvedAt: d.resolvedAt, resolutionNote: d.resolutionNote,
-});
-
-// ── request money (no Dwolla — just a note on the feed) ────
-app.post("/api/request", authRequired, moneyLimiter, idempotency, async (req, res) => {
-  const { handle, amount, note } = req.body || {};
-  const v = validateAmount(amount);
-  if (!v.ok) return res.status(400).json({ error: v.error });
-  const from = await getUserByHandle(handle);
-  if (!from) return res.status(404).json({ error: "No one with that handle." });
-  if (from.id === req.user.id) return res.status(400).json({ error: "You can't request money from yourself." });
-  await logRequest({ payerId: from.id, requesterId: req.user.id, cents: v.cents, note });
-  res.json({ ok: true });
-});
-
-// Serve the built web app from the same origin (used on Replit). SPA fallback
-// so client routes work on refresh. API + webhook are untouched.
+// Serve the built web app from the same origin (used on Railway/Replit). SPA
+// fallback so client routes work on refresh. API + webhooks are untouched.
 if (process.env.SERVE_WEB) {
   const __dirname = path.dirname(fileURLToPath(import.meta.url));
   const dist = path.resolve(__dirname, "../web/dist");
@@ -582,68 +690,23 @@ app.get("/api/health", (_req, res) => res.json({ ok: true }));
 // Anything a route throws lands here as clean JSON instead of a hung request.
 app.use((err, _req, res, _next) => {
   if (res.headersSent) return;
-  // Expected refusals (not enough verification, over a limit) carry their own
-  // status and a message meant for the user; only log the unexpected ones.
-  if (err instanceof PaymentError) {
-    return res.status(err.status).json({ error: err.message });
-  }
   console.error(err);
   res.status(500).json({ error: "Something went wrong on our end. Please try again." });
 });
 
 // ── background jobs ──────────────────────────────────────
-// Both crons assume a single instance (numReplicas: 1). If this service is
-// ever scaled out, move them to a dedicated worker or add a distributed lock,
-// or every replica will run the same sweep concurrently.
+// Assumes a single instance (numReplicas: 1). If this service is ever scaled
+// out, move this to a dedicated worker or add a distributed lock, or every
+// replica will run the same sweep concurrently.
 function startBackgroundJobs() {
   if (process.env.DISABLE_CRONS) return;
-
-  // Recurring shared expenses need no Dwolla involvement — they're bookkeeping,
-  // so this runs even when payments aren't configured.
   startRecurringExpenseCron();
-
-  if (!dwollaConfigured()) {
-    console.warn("[jobs] Dwolla not configured — reconciliation and dispute sweeps are disabled.");
-    return;
-  }
-
-  // Hourly: catch transfers whose webhook was missed or misrouted.
-  startReconcileCron(prisma, {
-    onDrift: async (drifts) => {
-      // No alerting integration yet — this is the hook for Slack/PagerDuty.
-      console.error("[dwolla] LEDGER DRIFT", JSON.stringify(drifts));
-    },
-  });
-
-  // Daily: enforce Reg E deadlines. Auto-issuing provisional credit needs a
-  // platform balance to pay from; without it we can only alert, since issuing
-  // credit we can't fund would record a credit that never actually moved.
-  let flows = null;
-  if (process.env.PLATFORM_BALANCE_FS_URL) {
-    flows = makeCreditFlows({ prisma, platformBalanceFundingSourceUrl: process.env.PLATFORM_BALANCE_FS_URL });
-  } else {
-    console.warn("[reg-e] PLATFORM_BALANCE_FS_URL not set — provisional credit will be flagged for manual action, not auto-issued.");
-  }
-
-  startDisputeDeadlineCron(prisma, {
-    onProvisionalCreditDue: async (dispute) => {
-      if (!flows) {
-        console.error(`[reg-e] ACTION REQUIRED: dispute ${dispute.id} is past the 10-business-day mark and needs provisional credit (no platform balance configured to auto-issue).`);
-        return;
-      }
-      await issueProvisionalCredit(prisma, dispute.id, { creditUser: flows.creditUser });
-    },
-    onFinalOverdue: async (dispute) => {
-      console.error(`[reg-e] ESCALATE: dispute ${dispute.id} is past the 45-day final deadline.`);
-    },
-  });
-
-  console.log("[jobs] recurring expenses + reconciliation + Reg E deadline sweeps scheduled");
+  console.log("[jobs] recurring shared-expense sweep scheduled");
 }
 
 const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => {
-  console.log(`even server on :${PORT}`);
+  console.log(`DoerToughMoney server on :${PORT}`);
   startBackgroundJobs();
 });
 
