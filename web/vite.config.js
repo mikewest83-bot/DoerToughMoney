@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: "autoUpdate",
       includeAssets: ["apple-touch-icon.png"],
       manifest: {
-        name: "even — settle up with anyone",
-        short_name: "even",
-        description: "Pay and request money with anyone, instantly.",
+        name: "DoerToughMoney — your money, your decisions, your advantage",
+        short_name: "DoerToughMoney",
+        description: "Track accounts, bills, budgets and goals, and find savings with DealTough.",
         theme_color: "#5B4DF5",
         background_color: "#F1F1F5",
         display: "standalone",
