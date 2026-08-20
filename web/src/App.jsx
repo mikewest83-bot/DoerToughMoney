@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import {
   X, LogOut, Building2, Share2,
   Fingerprint, Plus, Trash2, RefreshCw, ChevronRight, Pencil, Wallet as WalletIcon,
-  Receipt, PieChart, Target, TrendingUp, Tag, Users, FileText, Landmark, ArrowUp, ArrowDown,
+  Receipt, PieChart, Target, TrendingUp, Tag, Users, FileText, Landmark, ArrowUp, ArrowDown, CreditCard,
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -340,7 +340,8 @@ const TABS = [
   { k: "goals", l: "Goals", Icon: Target },
   { k: "insights", l: "Insights", Icon: TrendingUp },
   { k: "deals", l: "DealTough", Icon: Tag },
-  { k: "shared", l: "Shared", Icon: Users }
+  { k: "shared", l: "Shared", Icon: Users },
+  { k: "billing", l: "Billing", Icon: CreditCard },
 ];
 
 // ── Home ─────────────────────────────────────────────────
@@ -1026,11 +1027,84 @@ function DealsTab({ enabled }) {
   );
 }
 
+function BillingTab({ enabled }) {
+  const [status, setStatus] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!enabled) { setLoading(false); return; }
+    (async () => {
+      try { setStatus(await api.billingStatus()); } catch (e) { setErr(e.message); }
+      finally { setLoading(false); }
+    })();
+  }, [enabled]);
+
+  const go = async (call) => {
+    setBusy(true); setErr("");
+    try { const { url } = await call(); window.location.href = url; }
+    catch (e) { setErr(e.message); setBusy(false); }
+  };
+
+  if (!enabled) {
+    return (
+      <div style={card}>
+        <p style={{ margin: 0, fontSize: 14.5, color: C.muted }}>
+          Billing isn't connected on this deployment yet.
+        </p>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div style={card}>
+        <p style={{ margin: 0, fontSize: 14, color: C.muted }}>Loading…</p>
+      </div>
+    );
+  }
+
+  const isPro = status?.tier === "pro";
+  const pastDue = status?.status === "PAST_DUE";
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={card}>
+        <p style={sectionLabel}>Plan</p>
+        <p style={{ fontSize: 20, fontWeight: 800, marginTop: 8 }}>
+          {isPro ? "DoerToughMoney Pro" : "Free"}
+        </p>
+        {isPro && pastDue && (
+          <p style={{ fontSize: 13, color: C.red, marginTop: 4, fontWeight: 600 }}>
+            There's a problem with your payment method — update it to keep Pro active.
+          </p>
+        )}
+        {isPro && !pastDue && status?.currentPeriodEnd && (
+          <p style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>
+            Renews {new Date(status.currentPeriodEnd).toLocaleDateString()}
+          </p>
+        )}
+        {!isPro && (
+          <p style={{ fontSize: 13.5, color: C.muted, marginTop: 6 }}>
+            Upgrade for AI-driven coaching, cash-flow forecasts, and affordability checks.
+          </p>
+        )}
+        {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
+        <button onClick={() => go(isPro ? api.billingPortal : api.billingCheckout)} disabled={busy}
+          style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
+          {busy ? "…" : isPro ? "Manage billing" : "Upgrade to Pro"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ── Main authenticated shell ─────────────────────────────
 function Home({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
   const [ready, setReady] = useState(false);
-  const [cfg, setCfg] = useState({ plaidEnabled: false, dealtoughEnabled: false });
+  const [cfg, setCfg] = useState({ plaidEnabled: false, dealtoughEnabled: false, stripeEnabled: false });
   const [tab, setTab] = useState("home");
   const [openGroupId, setOpenGroupId] = useState(null);
 
@@ -1164,6 +1238,7 @@ function Home({ initialAuthMode = "login" }) {
           {tab === "goals" && <GoalsTab />}
           {tab === "insights" && <InsightsTab onGoTab={setTab} />}
           {tab === "deals" && <DealsTab enabled={!!cfg.dealtoughEnabled} />}
+          {tab === "billing" && <BillingTab enabled={!!cfg.stripeEnabled} />}
           {tab === "shared" && (
             openGroupId
               ? <GroupDetail groupId={openGroupId} onBack={() => setOpenGroupId(null)} onUserChanged={refresh} />
