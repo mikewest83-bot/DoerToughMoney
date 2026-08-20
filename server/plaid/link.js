@@ -1,5 +1,9 @@
 // server/plaid/link.js
 // Plaid Link flow with encrypted access tokens at rest.
+//
+// Normal Link launch intentionally does NOT send a phone number.
+// This keeps DoerToughMoney on Plaid's standard bank-linking flow
+// instead of forcing the Returning User phone-number experience.
 
 import { Products, CountryCode } from "plaid";
 import { plaid } from "./client.js";
@@ -9,34 +13,52 @@ import {
 } from "./tokenCrypto.js";
 
 /**
- * Start a Link session for this user.
- * Sandbox uses Plaid's seeded test phone number.
- * Production uses the user's normal Plaid flow.
+ * Start a Plaid Link session for this user.
+ *
+ * We intentionally only provide client_user_id here.
+ * phone_number is optional in Plaid's Link token request, but supplying it
+ * can trigger Plaid's Returning User phone-number flow. For the normal
+ * DoerToughMoney bank-linking experience, we want Plaid to collect whatever
+ * information it needs directly in Link.
  */
 export async function createLinkToken(userId, webhookUrl) {
-  const isSandbox = process.env.PLAID_ENV !== "production";
+  if (!userId) {
+    throw new Error("Missing user ID for Plaid Link.");
+  }
 
   const user = {
-    client_user_id: userId,
-    ...(isSandbox ? { phone_number: "4155550011" } : {}),
+    client_user_id: String(userId),
   };
 
-  const res = await plaid.linkTokenCreate({
+  const request = {
     user,
     client_name: "DoerToughMoney",
     products: [Products.Transactions],
     country_codes: [CountryCode.Us],
     language: "en",
-    webhook: webhookUrl || undefined,
-  });
+  };
+
+  // Only include the webhook when one is actually configured.
+  // This keeps local development and production behavior clean.
+  if (webhookUrl) {
+    request.webhook = webhookUrl;
+  }
+
+  const res = await plaid.linkTokenCreate(request);
 
   return res.data.link_token;
 }
 
 /**
  * Exchange Plaid's temporary public_token for a durable access_token.
+ *
+ * The access token is encrypted before being stored by the application.
  */
 export async function exchangePublicToken(publicToken) {
+  if (!publicToken) {
+    throw new Error("Missing Plaid public token.");
+  }
+
   const exchange = await plaid.itemPublicTokenExchange({
     public_token: publicToken,
   });
@@ -64,10 +86,15 @@ export async function exchangePublicToken(publicToken) {
       });
 
       institutionName =
-        inst.data.institution.name;
+        inst.data.institution.name || null;
     }
-  } catch {
-    // Non-fatal — the Item is already linked.
+  } catch (error) {
+    // The Item has already been successfully exchanged.
+    // Institution metadata is helpful but not required for the link flow.
+    console.warn(
+      "[plaid] Could not retrieve institution metadata:",
+      error?.response?.data || error?.message || error
+    );
   }
 
   return {
@@ -80,8 +107,14 @@ export async function exchangePublicToken(publicToken) {
 
 /**
  * Remove a Plaid Item.
+ *
+ * The access token is decrypted only when making the request to Plaid.
  */
 export async function removeItem(accessToken) {
+  if (!accessToken) {
+    throw new Error("Missing Plaid access token.");
+  }
+
   await plaid.itemRemove({
     access_token: decryptPlaidToken(accessToken),
   });
