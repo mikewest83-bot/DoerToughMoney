@@ -11,7 +11,7 @@ import { GroupsList, GroupDetail, ReminderBanners } from "./Groups.jsx";
 
 const C = {
   ink: "#16151A", canvas: "#F1F1F5", surface: "#FFFFFF",
-  brand: "#5B4DF5", brandSoft: "#ECEAFE", green: "#12A150",
+  brand: "brand: "#12A150",", brandSoft: "#ECEAFE", green: "#12A150",
   greenSoft: "#E4F5EC", amber: "#E8A33D", muted: "#7A7A86", line: "#E6E6EC", red: "#E5556E",
 };
 // Soft brand-tinted blobs over the base canvas color, used on full-page wrappers.
