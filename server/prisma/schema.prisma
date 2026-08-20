@@ -39,6 +39,17 @@ enum BillCadence {
   UNKNOWN
 }
 
+// Mirrors Stripe's own subscription statuses, collapsed to what the app
+// actually needs to branch on. PAST_DUE still keeps paid-tier access (Stripe
+// is mid-retry, not yet given up) — only CANCELED/NONE lock it.
+enum SubscriptionStatus {
+  NONE
+  TRIALING
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
 model User {
   id           String   @id @default(cuid())
   name         String
@@ -50,6 +61,16 @@ model User {
   // an existing password account whose email Google has verified matches.
   googleId     String?  @unique
   createdAt    DateTime @default(now())
+
+  // ── billing (Stripe subscriptions — card billing only, never touches
+  // money owed between users; see stripe.js) ──
+  stripeCustomerId     String?            @unique
+  stripeSubscriptionId String?            @unique
+  subscriptionStatus   SubscriptionStatus @default(NONE)
+  // Free-form on purpose — which price/plan maps to which tier lives in
+  // Stripe, not hardcoded here. Null while status isn't ACTIVE/TRIALING.
+  subscriptionTier     String?
+  currentPeriodEnd     DateTime?
 
   groupMemberships GroupMember[]
   createdGroups    Group[]
