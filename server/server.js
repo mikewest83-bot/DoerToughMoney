@@ -41,7 +41,11 @@ validateProductionConfig();
 
 const app = express();
 app.set("trust proxy", 1); // behind Railway's proxy — needed for correct rate-limit IPs
-app.use(cors({ origin: process.env.WEB_ORIGIN || "http://localhost:5173" }));
+const allowedOrigins = new Set([process.env.WEB_ORIGIN, "http://localhost:5173", "http://127.0.0.1:5173"].filter(Boolean));
+app.use(cors({ origin: (origin, callback) => {
+  if (!origin || allowedOrigins.has(origin)) return callback(null, true);
+  return callback(new Error("Not allowed by CORS"));
+} }));
 
 // Plaid webhook needs the raw body to verify the SHA-256 the signing JWT
 // carries, so it's captured via express.json()'s verify hook rather than a
@@ -728,3 +732,4 @@ app.listen(PORT, () => {
 });
 
 export default app;
+
