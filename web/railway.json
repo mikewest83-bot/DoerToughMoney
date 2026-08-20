@@ -5,7 +5,7 @@
     "buildCommand": "npm run build"
   },
   "deploy": {
-    "startCommand": "npx vite preview --host 0.0.0.0 --port $PORT",
+    "startCommand": "node -e \"const http=require('http'),fs=require('fs'),path=require('path');const port=process.env.PORT||8080;http.createServer((req,res)=>{let u=req.url.split('?')[0];let f=path.join('dist',u==='/'?'index.html':u);if(!fs.existsSync(f)||fs.statSync(f).isDirectory())f='dist/index.html';res.setHeader('Cache-Control','no-cache');fs.createReadStream(f).on('error',()=>{res.statusCode=500;res.end('Server error')}).pipe(res)}).listen(port,'0.0.0.0')\"",
     "restartPolicyType": "ON_FAILURE"
   }
 }
