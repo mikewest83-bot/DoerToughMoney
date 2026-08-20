@@ -1,5 +1,5 @@
 {
-  "name": "even-app",
+  "name": "doertoughmoney",
   "private": true,
   "engines": {
     "node": "20.x"
@@ -9,3 +9,4 @@
     "start": "cd server && npm run start"
   }
 }
+
