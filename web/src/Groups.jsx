@@ -9,7 +9,7 @@ import { api } from "./api.js";
 // reasoned about on its own.
 const C = {
   ink: "#16151A", canvas: "#F1F1F5", surface: "#FFFFFF",
-  brand: "#5B4DF5", brandSoft: "#ECEAFE", green: "#12A150",
+  brand: "#12A150", brandSoft: "#ECEAFE", green: "#12A150",
   greenSoft: "#E4F5EC", amber: "#E8A33D", muted: "#7A7A86", line: "#E6E6EC",
   red: "#E5556E", redSoft: "#FDECEF",
 };
@@ -17,7 +17,7 @@ const display = "'Bricolage Grotesque', sans-serif"; // character — used for n
 const mono = "'Space Mono', monospace";              // precision — used for money
 
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const AV = ["#5B4DF5", "#12A150", "#E8A33D", "#E5556E", "#2AA6C4", "#8B5CF6", "#EC6C3E"];
+const AV = ["#12A150", "#12A150", "#E8A33D", "#E5556E", "#2AA6C4", "#8B5CF6", "#EC6C3E"];
 const initials = (n = "") => n.split(" ").map((w) => w[0]).slice(0, 2).join("").toUpperCase();
 const colorFor = (n = "") => { let h = 0; for (const c of n) h = (h * 31 + c.charCodeAt(0)) % AV.length; return AV[h]; };
 
