@@ -338,7 +338,7 @@ const TABS = [
   { k: "goals", l: "Goals", Icon: Target },
   { k: "insights", l: "Insights", Icon: TrendingUp },
   { k: "deals", l: "DealTough", Icon: Tag },
-  { k: "shared", l: "Shared", Icon: Users },
+  { k: "shared", l: "Shared", Icon: Users }
 ];
 
 // ── Home ─────────────────────────────────────────────────
@@ -347,7 +347,7 @@ function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable,
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
       <div style={{ ...card, background: C.ink, color: "#fff", border: "none" }}>
-        <span style={{ color: "#B9B9C6", fontSize: 13, fontWeight: 500 }}>Available to spend</span>
+        <span style={{ color: "#12A150", fontSize: 13, fontWeight: 500 }}>Available to spend</span>
         <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 34, fontWeight: 700, marginTop: 6 }}>${money(totalAvailable)}</div>
         {totalDebt > 0 && <p style={{ margin: "6px 0 0", fontSize: 13, color: "#D8D8E2" }}>${money(totalDebt)} owed on credit accounts</p>}
         <button onClick={() => onGoTab("accounts")} style={{ ...pill, marginTop: 14 }}>
