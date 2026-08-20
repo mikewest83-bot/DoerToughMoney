@@ -418,4 +418,21 @@ export const api = {
         method: "POST",
       }
     ),
+
+  // ─────────────────────────────────────────────
+  // BILLING
+  // ─────────────────────────────────────────────
+
+  billingStatus: () =>
+    req("/api/billing/status"),
+
+  billingCheckout: () =>
+    req("/api/billing/checkout", {
+      method: "POST",
+    }),
+
+  billingPortal: () =>
+    req("/api/billing/portal", {
+      method: "POST",
+    }),
 };
