@@ -36,6 +36,7 @@ import {
   totalAvailableCents, totalDebtCents, budgetStatus, goalProgress,
 } from "./insights.js";
 import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
+import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
 
 validateProductionConfig();
 
@@ -59,6 +60,12 @@ app.post(
   plaidWebhook(prisma)
 );
 
+// Stripe signs the raw request bytes, not a re-serialized JSON body (unlike
+// the Plaid webhook above), so this has to run BEFORE express.json() ever
+// touches the body — express.json() below would otherwise parse and discard
+// the raw buffer stripeWebhook() needs to verify the signature.
+app.post("/webhooks/stripe", express.raw({ type: "application/json" }), stripeWebhook());
+
 app.use(express.json());
 
 // ── rate limiting ────────────────────────────────────────
@@ -73,6 +80,9 @@ const plaidLimiter = limit(20, "Slow down a moment and try again.");
 // Ledger writes don't move money but they do mutate shared state other people
 // see, so they get their own budget rather than only the broad API limit.
 const ledgerLimiter = limit(60, "Slow down a moment and try again.");
+// Checkout/portal calls hit Stripe's own API, so they get their own budget
+// rather than the broad API limit.
+const billingLimiter = limit(20, "Slow down a moment and try again.");
 
 app.use("/api", apiLimiter);
 
@@ -83,6 +93,7 @@ app.get("/api/config", (_req, res) => {
     googleClientId: googleConfigured() ? process.env.GOOGLE_CLIENT_ID : null,
     plaidEnabled: plaidConfigured(),
     dealtoughEnabled: dealtoughConfigured(),
+    stripeEnabled: stripeConfigured(),
   });
 });
 
@@ -414,6 +425,37 @@ app.post("/api/dealtough/analyze", authRequired, ledgerLimiter, async (req, res)
   }
 });
 
+// ── billing (Stripe subscriptions) ───────────────────────
+// Card billing only — same boundary as everywhere else in this app. Actual
+// subscription state lives on the User row, kept in sync by the webhook
+// above; these routes just start/manage that relationship on Stripe's side.
+app.get("/api/billing/status", authRequired, (req, res) => {
+  res.json({
+    tier: req.user.subscriptionTier,
+    status: req.user.subscriptionStatus,
+    currentPeriodEnd: req.user.currentPeriodEnd,
+  });
+});
+
+app.post("/api/billing/checkout", authRequired, billingLimiter, async (req, res) => {
+  if (!stripeConfigured()) return res.status(503).json({ error: "Billing isn't available right now." });
+  const url = await createCheckoutSession(req.user, {
+    successUrl: `${process.env.WEB_ORIGIN}/?billing=success`,
+    cancelUrl: `${process.env.WEB_ORIGIN}/?billing=cancel`,
+  });
+  res.json({ url });
+});
+
+app.post("/api/billing/portal", authRequired, billingLimiter, async (req, res) => {
+  if (!stripeConfigured()) return res.status(503).json({ error: "Billing isn't available right now." });
+  try {
+    const url = await createPortalSession(req.user, { returnUrl: `${process.env.WEB_ORIGIN}/` });
+    res.json({ url });
+  } catch (e) {
+    res.status(400).json({ error: e.message || "Couldn't open billing management." });
+  }
+});
+
 // ── shared expenses ──────────────────────────────────────
 // Debts are tracked data, not custody — DoerToughMoney never holds or moves
 // anyone else's money. Settling up records a cash payoff, not a transfer.
@@ -732,4 +774,3 @@ app.listen(PORT, () => {
 });
 
 export default app;
-
