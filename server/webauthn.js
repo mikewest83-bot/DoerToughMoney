@@ -1,30 +1,17 @@
 // webauthn.js — DoerToughMoney passkey (Face ID / Touch ID) enrollment
 // and sign-in.
-//
-// Passkey enrollment requires an authenticated DoerToughMoney account.
-// Passkey sign-in is discoverable/usernameless.
-//
-// IMPORTANT:
-// Production WebAuthn must use the exact DoerToughMoney web hostname.
 
 import { randomUUID } from "crypto";
-
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
   generateAuthenticationOptions,
   verifyAuthenticationResponse,
 } from "@simplewebauthn/server";
-
 import prisma from "./db.js";
 import { signToken, publicUser } from "./auth.js";
 
-// ─────────────────────────────────────────────────────────
-// DoerToughMoney WebAuthn configuration
-// ─────────────────────────────────────────────────────────
-
 const RP_NAME = "DoerToughMoney";
-
 const PRODUCTION_ORIGIN =
   "https://doertoughmoney-web-production.up.railway.app";
 
@@ -40,13 +27,7 @@ function rpId() {
   }
 }
 
-// ─────────────────────────────────────────────────────────
-// Challenge storage
-// ─────────────────────────────────────────────────────────
-
 const CHALLENGE_TTL_MS = 5 * 60_000;
-
-// attemptId -> { challenge, userId?, expires }
 const challenges = new Map();
 
 function stashChallenge(challenge, userId = null) {
@@ -64,7 +45,6 @@ function stashChallenge(challenge, userId = null) {
 function takeChallenge(attemptId) {
   const entry = challenges.get(attemptId);
 
-  // Challenges are single-use.
   challenges.delete(attemptId);
 
   if (!entry || entry.expires < Date.now()) {
@@ -74,7 +54,6 @@ function takeChallenge(attemptId) {
   return entry;
 }
 
-// Clean up abandoned ceremonies.
 setInterval(() => {
   const now = Date.now();
 
@@ -85,8 +64,9 @@ setInterval(() => {
   }
 }, CHALLENGE_TTL_MS).unref();
 
+
 // ─────────────────────────────────────────────────────────
-// List enrolled passkeys
+// LIST ENROLLED PASSKEYS
 // ─────────────────────────────────────────────────────────
 
 export async function listCredentials(req, res) {
@@ -109,7 +89,10 @@ export async function listCredentials(req, res) {
       credentials: rows,
     });
   } catch (error) {
-    console.error("Passkey credential lookup failed:", error);
+    console.error(
+      "Passkey credential lookup failed:",
+      error
+    );
 
     res.status(500).json({
       error: "Unable to load passkey settings.",
@@ -117,9 +100,9 @@ export async function listCredentials(req, res) {
   }
 }
 
+
 // ─────────────────────────────────────────────────────────
-// Passkey enrollment
-// Requires existing authentication.
+// PASSKEY ENROLLMENT
 // ─────────────────────────────────────────────────────────
 
 export async function registrationOptions(req, res) {
@@ -138,7 +121,9 @@ export async function registrationOptions(req, res) {
       rpName: RP_NAME,
       rpID: rpId(),
 
-      userID: Buffer.from(String(req.user.id)),
+      userID: Buffer.from(
+        String(req.user.id)
+      ),
 
       userName: req.user.email,
 
@@ -147,10 +132,13 @@ export async function registrationOptions(req, res) {
 
       attestationType: "none",
 
-      excludeCredentials: existing.map((credential) => ({
-        id: credential.credentialId,
-        transports: credential.transports || [],
-      })),
+      excludeCredentials: existing.map(
+        (credential) => ({
+          id: credential.credentialId,
+          transports:
+            credential.transports || [],
+        })
+      ),
 
       authenticatorSelection: {
         residentKey: "required",
@@ -169,16 +157,21 @@ export async function registrationOptions(req, res) {
       options,
     });
   } catch (error) {
-    console.error("Passkey registration options failed:", error);
+    console.error(
+      "Passkey registration options failed:",
+      error
+    );
 
     res.status(500).json({
-      error: "Unable to start Face ID enrollment.",
+      error:
+        "Unable to start Face ID enrollment.",
     });
   }
 }
 
+
 // ─────────────────────────────────────────────────────────
-// Passkey enrollment verification
+// PASSKEY ENROLLMENT VERIFICATION
 // ─────────────────────────────────────────────────────────
 
 export async function registrationVerify(req, res) {
@@ -190,7 +183,10 @@ export async function registrationVerify(req, res) {
 
   const entry = takeChallenge(attemptId);
 
-  if (!entry || entry.userId !== req.user.id) {
+  if (
+    !entry ||
+    entry.userId !== req.user.id
+  ) {
     return res.status(400).json({
       error:
         "That Face ID request expired. Please start enrollment again.",
@@ -200,15 +196,19 @@ export async function registrationVerify(req, res) {
   let verification;
 
   try {
-    verification = await verifyRegistrationResponse({
-      response,
+    verification =
+      await verifyRegistrationResponse({
+        response,
 
-      expectedChallenge: entry.challenge,
+        expectedChallenge:
+          entry.challenge,
 
-      expectedOrigin: expectedOrigin(),
+        expectedOrigin:
+          expectedOrigin(),
 
-      expectedRPID: rpId(),
-    });
+        expectedRPID:
+          rpId(),
+      });
   } catch (error) {
     console.error(
       "Passkey registration verification failed:",
@@ -227,7 +227,8 @@ export async function registrationVerify(req, res) {
     !verification.registrationInfo
   ) {
     return res.status(400).json({
-      error: "Couldn't verify this device.",
+      error:
+        "Couldn't verify this device.",
     });
   }
 
@@ -239,22 +240,30 @@ export async function registrationVerify(req, res) {
       data: {
         userId: req.user.id,
 
-        credentialId: credential.id,
+        credentialId:
+          credential.id,
 
-        publicKey: Buffer.from(
-          credential.publicKey
-        ),
+        publicKey:
+          Buffer.from(
+            credential.publicKey
+          ),
 
-        counter: BigInt(
-          credential.counter
-        ),
+        counter:
+          BigInt(
+            credential.counter
+          ),
 
         transports:
-          response?.response?.transports || [],
+          response?.response?.transports ||
+          [],
 
-        deviceLabel: deviceLabel
-          ? String(deviceLabel).slice(0, 60)
-          : "iPhone",
+        deviceLabel:
+          deviceLabel
+            ? String(deviceLabel).slice(
+                0,
+                60
+              )
+            : "iPhone",
       },
     });
   } catch (error) {
@@ -274,12 +283,15 @@ export async function registrationVerify(req, res) {
   });
 }
 
+
 // ─────────────────────────────────────────────────────────
-// Passkey sign-in options
-// Public / discoverable
+// PASSKEY SIGN-IN OPTIONS
 // ─────────────────────────────────────────────────────────
 
-export async function authenticationOptions(_req, res) {
+export async function authenticationOptions(
+  _req,
+  res
+) {
   try {
     const options =
       await generateAuthenticationOptions({
@@ -287,15 +299,32 @@ export async function authenticationOptions(_req, res) {
 
         userVerification: "required",
 
-        // IMPORTANT:
-        // Empty allowCredentials makes this a discoverable
-        // usernameless passkey flow.
+        // Empty means discoverable/usernameless.
         allowCredentials: [],
       });
 
-    const attemptId = stashChallenge(
-      options.challenge
-    );
+    // IMPORTANT:
+    // Some Safari/iOS WebAuthn paths reject the
+    // request when allowCredentials disappears
+    // from the serialized options object.
+    //
+    // Explicitly preserve an empty array so the
+    // browser receives:
+    //
+    // allowCredentials: []
+    //
+    // This keeps Face ID usernameless/discoverable.
+    options.allowCredentials =
+      Array.isArray(
+        options.allowCredentials
+      )
+        ? options.allowCredentials
+        : [];
+
+    const attemptId =
+      stashChallenge(
+        options.challenge
+      );
 
     res.json({
       attemptId,
@@ -314,17 +343,22 @@ export async function authenticationOptions(_req, res) {
   }
 }
 
+
 // ─────────────────────────────────────────────────────────
-// Passkey sign-in verification
+// PASSKEY SIGN-IN VERIFICATION
 // ─────────────────────────────────────────────────────────
 
-export async function authenticationVerify(req, res) {
+export async function authenticationVerify(
+  req,
+  res
+) {
   const {
     attemptId,
     response,
   } = req.body || {};
 
-  const entry = takeChallenge(attemptId);
+  const entry =
+    takeChallenge(attemptId);
 
   if (!entry) {
     return res.status(400).json({
@@ -343,8 +377,10 @@ export async function authenticationVerify(req, res) {
   const cred =
     await prisma.credential.findUnique({
       where: {
-        credentialId: response.id,
+        credentialId:
+          response.id,
       },
+
       include: {
         user: true,
       },
@@ -374,13 +410,16 @@ export async function authenticationVerify(req, res) {
           rpId(),
 
         credential: {
-          id: cred.credentialId,
+          id:
+            cred.credentialId,
 
-          publicKey: cred.publicKey,
+          publicKey:
+            cred.publicKey,
 
-          counter: Number(
-            cred.counter
-          ),
+          counter:
+            Number(
+              cred.counter
+            ),
 
           transports:
             cred.transports || [],
@@ -406,25 +445,30 @@ export async function authenticationVerify(req, res) {
     });
   }
 
-  // Update authenticator counter.
   await prisma.credential.update({
     where: {
       id: cred.id,
     },
 
     data: {
-      counter: BigInt(
-        verification.authenticationInfo
-          .newCounter
-      ),
+      counter:
+        BigInt(
+          verification
+            .authenticationInfo
+            .newCounter
+        ),
     },
   });
 
   res.json({
-    token: signToken(cred.user),
+    token:
+      signToken(
+        cred.user
+      ),
 
-    user: publicUser(
-      cred.user
-    ),
+    user:
+      publicUser(
+        cred.user
+      ),
   });
 }
