@@ -33,7 +33,9 @@ const fontStyle = (
     @keyframes spin{from{transform:rotate(0deg)}to{transform:rotate(360deg)}}
     button:focus-visible,input:focus-visible{outline:2px solid ${C.brand};outline-offset:2px}
     input,select,textarea{font-family:inherit}
+    .tabrow{flex-wrap:wrap;overflow:visible}
     .tabrow::-webkit-scrollbar{display:none}
+    @media (max-width:600px){.tabrow{flex-wrap:nowrap;overflow-x:auto}}
   `}</style>
 );
 
@@ -345,8 +347,8 @@ const TABS = [
 function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable, onGoTab }) {
   const top3 = (insights?.byCategory || []).slice(0, 3);
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <div style={{ ...card, background: C.ink, color: "#fff", border: "none" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ ...card, background: "linear-gradient(135deg, #16151A 0%, #25232A 100%)", color: "#fff", border: "none", borderRadius: 24, padding: "24px 26px" }}>
         <span style={{ color: "#12A150", fontSize: 13, fontWeight: 500 }}>Available to spend</span>
         <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 34, fontWeight: 700, marginTop: 6 }}>${money(totalAvailable)}</div>
         {totalDebt > 0 && <p style={{ margin: "6px 0 0", fontSize: 13, color: "#D8D8E2" }}>${money(totalDebt)} owed on credit accounts</p>}
@@ -451,7 +453,7 @@ function AccountsTab({ onChanged }) {
   if (loading) return <p style={{ color: C.muted, fontSize: 14 }}>Loading…</p>;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       {linkToken && (
         <BankLoginLauncher
           linkToken={linkToken}
@@ -643,7 +645,7 @@ function BillsTab({ onGoTab }) {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <button onClick={openNew} style={{ ...bigBtn, background: C.brand, color: "#fff" }}><Plus size={17} /> Add a bill</button>
       {err && <p style={{ color: C.red, fontSize: 13 }}>{err}</p>}
 
@@ -733,7 +735,7 @@ function BudgetsTab() {
   const remove = async (id) => { try { await api.deleteBudget(id); await load(); } catch (e) { setErr(e.message); } };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <button onClick={openNew} style={{ ...bigBtn, background: C.brand, color: "#fff" }}><Plus size={17} /> Set a budget</button>
       {err && <p style={{ color: C.red, fontSize: 13 }}>{err}</p>}
 
@@ -806,7 +808,7 @@ function GoalsTab() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <button onClick={openNew} style={{ ...bigBtn, background: C.brand, color: "#fff" }}><Plus size={17} /> Add a goal</button>
       {err && <p style={{ color: C.red, fontSize: 13 }}>{err}</p>}
 
@@ -872,7 +874,7 @@ function InsightsTab({ onGoTab }) {
   const maxCat = Math.max(1, ...data.byCategory.map((c) => c.amount));
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={card}>
         <p style={sectionLabel}>This month</p>
         <div style={{ display: "flex", gap: 18, marginTop: 10 }}>
@@ -966,7 +968,7 @@ function DealsTab({ enabled }) {
   const extraEntries = result ? Object.entries(result).filter(([k]) => !knownKeys.includes(k)) : [];
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={card}>
         <p style={sectionLabel}>Can I get this cheaper?</p>
         <p style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 12px" }}>
@@ -1101,9 +1103,9 @@ function Home({ initialAuthMode = "login" }) {
     <div style={{ minHeight: "100vh", background: pageBg, display: "flex", justifyContent: "center",
       fontFamily: "Inter, system-ui, sans-serif", color: C.ink }}>
       {fontStyle}
-      <div style={{ width: "100%", maxWidth: 448, position: "relative", minHeight: "100vh" }}>
+      <div style={{ width: "100%", maxWidth: 680, position: "relative", minHeight: "100vh" }}>
 
-        <header style={{ padding: "24px 20px 8px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+        <header style={{ padding: "28px 28px 10px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800, fontSize: 22, letterSpacing: "-0.03em" }}>
             DoerTough<span style={{ color: C.brand }}>Money</span>
           </span>
@@ -1136,7 +1138,7 @@ function Home({ initialAuthMode = "login" }) {
           </div>
         )}
 
-        <div className="tabrow" style={{ display: "flex", gap: 6, padding: "18px 20px 0", overflowX: "auto" }}>
+        <div className="tabrow" style={{ display: "flex", gap: 8, padding: "16px 28px 0" }}>
           {TABS.map((t) => (
             <button key={t.k} onClick={() => { setTab(t.k); if (t.k !== "shared") setOpenGroupId(null); }}
               style={{
@@ -1150,7 +1152,7 @@ function Home({ initialAuthMode = "login" }) {
           ))}
         </div>
 
-        <section style={{ padding: "18px 20px 40px" }}>
+        <section style={{ padding: "20px 28px 56px" }}>
           {tab === "home" && (
             <HomeTab accounts={accounts} totalAvailable={totalAvailable} totalDebt={totalDebt}
               insights={insights} topNegotiable={topNegotiable} onGoTab={setTab} />
