@@ -38,11 +38,15 @@ export default defineConfig({
         ],
       },
       workbox: {
-        navigateFallbackDenylist: [/^\/api\//],
+        navigateFallbackDenylist: [/^\\/api\\//],
       },
     }),
   ],
   server: {
     port: 5173,
   },
+  preview: {
+    middlewareMode: false,
+  },
 });
+
