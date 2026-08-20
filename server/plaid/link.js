@@ -10,13 +10,19 @@ import {
 
 /**
  * Start a Link session for this user.
- * @param userId DoerToughMoney user id — becomes Plaid's client_user_id
- * @param webhookUrl where Plaid should POST item/transaction webhooks
- * @returns {string} link_token the browser hands to Plaid Link
+ * Sandbox uses Plaid's seeded test phone number.
+ * Production uses the user's normal Plaid flow.
  */
 export async function createLinkToken(userId, webhookUrl) {
+  const isSandbox = process.env.PLAID_ENV !== "production";
+
+  const user = {
+    client_user_id: userId,
+    ...(isSandbox ? { phone_number: "4155550011" } : {}),
+  };
+
   const res = await plaid.linkTokenCreate({
-    user: { client_user_id: userId },
+    user,
     client_name: "DoerToughMoney",
     products: [Products.Transactions],
     country_codes: [CountryCode.Us],
@@ -29,16 +35,6 @@ export async function createLinkToken(userId, webhookUrl) {
 
 /**
  * Exchange Plaid's temporary public_token for a durable access_token.
- *
- * The durable token is encrypted immediately before being returned.
- * This prevents callers from accidentally persisting it in plaintext.
- *
- * @returns {{
- *   accessToken,
- *   plaidItemId,
- *   institutionId,
- *   institutionName
- * }}
  */
 export async function exchangePublicToken(publicToken) {
   const exchange = await plaid.itemPublicTokenExchange({
@@ -84,9 +80,6 @@ export async function exchangePublicToken(publicToken) {
 
 /**
  * Remove a Plaid Item.
- *
- * Accepts the encrypted database value and decrypts it
- * only in server memory immediately before calling Plaid.
  */
 export async function removeItem(accessToken) {
   await plaid.itemRemove({
