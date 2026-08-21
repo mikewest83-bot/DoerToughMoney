@@ -117,13 +117,26 @@ async function syncSubscriptionFromStripe(subscription) {
   }
 
   const status = mapStatus(subscription.status);
+  // Stripe API versions 2025-03-31+ moved current_period_end off the
+  // Subscription object and onto each SubscriptionItem. Outbound calls made
+  // by this file's own Stripe client are pinned to STRIPE_API_VERSION
+  // (2024-06-20, top-level field still present), but incoming webhook
+  // events are rendered by Stripe at whatever API version the *endpoint*
+  // itself is configured for in the dashboard — which can be newer and so
+  // lack the top-level field entirely. Fall back to the first subscription
+  // item's current_period_end so this doesn't silently write null for
+  // every subscription synced purely via webhook.
+  const periodEndRaw =
+    subscription.current_period_end ??
+    subscription.items?.data?.[0]?.current_period_end ??
+    null;
   await prisma.user.update({
     where: { id: userId },
     data: {
       stripeSubscriptionId: subscription.id,
       subscriptionStatus: status,
       subscriptionTier: ENTITLED.has(status) ? "pro" : null,
-      currentPeriodEnd: subscription.current_period_end ? new Date(subscription.current_period_end * 1000) : null,
+      currentPeriodEnd: periodEndRaw ? new Date(periodEndRaw * 1000) : null,
     },
   });
 }
