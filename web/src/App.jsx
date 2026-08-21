@@ -3,6 +3,7 @@ import {
   X, LogOut, Building2, Share2,
   Fingerprint, Plus, Trash2, RefreshCw, ChevronRight, Pencil, Wallet as WalletIcon,
   Receipt, PieChart, Target, TrendingUp, Tag, Users, FileText, Landmark, ArrowUp, ArrowDown, CreditCard,
+  Bot,
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -1068,6 +1069,99 @@ function DealsTab({ enabled }) {
   );
 }
 
+// Read-only view of Mike's own DoerBot crypto trading bot — a separate
+// service this app calls out to (see server/doerbot.js). No controls here on
+// purpose: this can't start/stop/kill the bot, only show what it's doing.
+// The tab itself only renders for the one account /api/me marks as the
+// owner, but the route is also gated server-side, so this component never
+// needs to re-check who's looking.
+function DoerBotTab() {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+
+  const load = useCallback(async () => {
+    setLoading(true); setErr("");
+    try { setSummary(await api.doerbotStatus()); }
+    catch (e) { setErr(e.message || "Couldn't reach DoerBot."); }
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  if (loading && !summary) {
+    return <div style={card}><p style={{ margin: 0, fontSize: 14.5, color: C.muted }}>Loading…</p></div>;
+  }
+
+  if (err) {
+    return (
+      <div style={card}>
+        <p style={sectionLabel}>DoerBot</p>
+        <p style={{ margin: "6px 0 0", fontSize: 14.5, color: C.muted }}>{err}</p>
+        <button onClick={load} style={{ ...lightPill, marginTop: 12 }}><RefreshCw size={13} /> Retry</button>
+      </div>
+    );
+  }
+
+  if (!summary) return null;
+
+  const {
+    paper, running, killed, unprotected, watchdogHealthy,
+    openPositions, equity, cash, dayChange, dayChangePct,
+  } = summary;
+
+  const statusLabel = killed ? "Killed" : running ? "Running" : "Stopped";
+  const statusColor = killed ? C.red : running ? C.green : C.amber;
+  const dayIsUp = typeof dayChange === "number" && dayChange >= 0;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+      <div style={{ ...card, background: "linear-gradient(135deg, #16151A 0%, #25232A 100%)", color: "#fff", border: "none", borderRadius: 24, padding: "24px 26px" }}>
+        <span style={{ color: "#12A150", fontSize: 13, fontWeight: 500 }}>DoerBot equity</span>
+        <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 34, fontWeight: 700, marginTop: 6 }}>
+          {equity != null ? `$${money(equity)}` : "—"}
+        </div>
+        {dayChange != null && (
+          <p style={{ margin: "6px 0 0", fontSize: 13, color: dayIsUp ? "#8BE0AE" : "#F3A3B4", display: "flex", alignItems: "center", gap: 4 }}>
+            {dayIsUp ? <ArrowUp size={13} /> : <ArrowDown size={13} />}
+            ${money(Math.abs(dayChange))} today{dayChangePct != null ? ` (${(dayChangePct * 100).toFixed(2)}%)` : ""}
+          </p>
+        )}
+        <button onClick={load} style={{ ...pill, marginTop: 14 }}><RefreshCw size={14} /> Refresh</button>
+      </div>
+
+      <div style={card}>
+        <p style={sectionLabel}>Status</p>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+          <span style={{ ...statusPill, borderColor: statusColor, color: statusColor }}>{statusLabel}</span>
+          <span style={{ ...statusPill, borderColor: C.line, color: C.muted }}>{paper ? "Paper" : "Live"}</span>
+          <span style={{ ...statusPill, borderColor: unprotected ? C.red : C.line, color: unprotected ? C.red : C.muted }}>
+            {unprotected ? "Unprotected" : "Protected"}
+          </span>
+          {watchdogHealthy === false && (
+            <span style={{ ...statusPill, borderColor: C.red, color: C.red }}>Watchdog alert</span>
+          )}
+        </div>
+        <p style={{ margin: "14px 0 0", fontSize: 13, color: C.muted }}>
+          {openPositions} open position{openPositions === 1 ? "" : "s"}{cash != null ? ` · $${money(cash)} cash` : ""}
+        </p>
+      </div>
+
+      <div style={card}>
+        <p style={{ margin: 0, fontSize: 12.5, color: C.muted }}>
+          Read-only — this shows what DoerBot is doing, it can't start, stop, or trade it. RSI mean-reversion hasn't
+          shown a real edge in testing yet, so treat any equity swing as experimental, not a track record.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+const statusPill = {
+  display: "inline-flex", alignItems: "center", padding: "5px 11px", borderRadius: 999,
+  fontSize: 12.5, fontWeight: 700, border: "1.5px solid", background: "transparent",
+};
+
 function BillingTab({ enabled }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -1144,6 +1238,7 @@ function BillingTab({ enabled }) {
 // ── Main authenticated shell ─────────────────────────────
 function Home({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
+  const [isDoerBotOwner, setIsDoerBotOwner] = useState(false);
   const [ready, setReady] = useState(false);
   const [cfg, setCfg] = useState({ plaidEnabled: false, dealtoughEnabled: false, stripeEnabled: false });
   const [tab, setTab] = useState("home");
@@ -1154,6 +1249,10 @@ function Home({ initialAuthMode = "login" }) {
   const [totalDebt, setTotalDebt] = useState(0);
   const [insights, setInsights] = useState(null);
   const [topNegotiable, setTopNegotiable] = useState([]);
+
+  // Only Mike sees this tab — isDoerBotOwner comes from the server (/api/me),
+  // never guessed client-side, so no other account can even see it exists.
+  const visibleTabs = isDoerBotOwner ? [...TABS, { k: "doerbot", l: "DoerBot", Icon: Bot }] : TABS;
 
   // ── passkey enrollment prompt ─────────────────────────────
   // Shown once per account, on a device that supports it, until the user
@@ -1195,8 +1294,9 @@ function Home({ initialAuthMode = "login" }) {
   }, []);
 
   const refresh = useCallback(async () => {
-    const { user } = await api.me();
+    const { user, isDoerBotOwner } = await api.me();
     setUser(user);
+    setIsDoerBotOwner(!!isDoerBotOwner);
     try { setHasPasskey((await api.passkeyCredentials()).credentials.length > 0); } catch {}
     await loadOverview();
   }, [loadOverview]);
@@ -1254,7 +1354,7 @@ function Home({ initialAuthMode = "login" }) {
         )}
 
         <div className="tabrow" style={{ display: "flex", gap: 8, padding: "16px 28px 0" }}>
-          {TABS.map((t) => (
+          {visibleTabs.map((t) => (
             <button key={t.k} onClick={() => { setTab(t.k); if (t.k !== "shared") setOpenGroupId(null); }}
               style={{
                 flexShrink: 0, display: "flex", alignItems: "center", gap: 6, padding: "9px 14px", borderRadius: 12, fontSize: 13, fontWeight: 700, cursor: "pointer",
@@ -1280,6 +1380,7 @@ function Home({ initialAuthMode = "login" }) {
           {tab === "insights" && <InsightsTab onGoTab={setTab} />}
           {tab === "deals" && <DealsTab enabled={!!cfg.dealtoughEnabled} />}
           {tab === "billing" && <BillingTab enabled={!!cfg.stripeEnabled} />}
+          {tab === "doerbot" && isDoerBotOwner && <DoerBotTab />}
           {tab === "shared" && (
             openGroupId
               ? <GroupDetail groupId={openGroupId} onBack={() => setOpenGroupId(null)} onUserChanged={refresh} />

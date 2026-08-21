@@ -38,6 +38,7 @@ import {
 import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
 import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
 import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
+import { doerbotConfigured, getDoerBotSummary } from "./doerbot.js";
 
 validateProductionConfig();
 
@@ -81,6 +82,10 @@ const plaidLimiter = limit(20, "Slow down a moment and try again.");
 // Ledger writes don't move money but they do mutate shared state other people
 // see, so they get their own budget rather than only the broad API limit.
 const ledgerLimiter = limit(60, "Slow down a moment and try again.");
+
+// Lowercased once so every comparison downstream is a simple ===. Only this
+// one email ever sees the DoerBot tab or its data — see the route below.
+const DOERBOT_OWNER_EMAIL = (process.env.DOERBOT_OWNER_EMAIL || "").trim().toLowerCase();
 // Checkout/portal calls hit Stripe's own API, so they get their own budget
 // rather than the broad API limit.
 const billingLimiter = limit(20, "Slow down a moment and try again.");
@@ -116,7 +121,10 @@ app.post("/api/webauthn/login/verify", authLimiter, passkeyAuthVerify);
 
 // ── me ───────────────────────────────────────────────────
 app.get("/api/me", authRequired, (req, res) => {
-  res.json({ user: publicUser(req.user) });
+  const isDoerBotOwner = Boolean(
+    DOERBOT_OWNER_EMAIL && (req.user.email || "").toLowerCase() === DOERBOT_OWNER_EMAIL
+  );
+  res.json({ user: publicUser(req.user), isDoerBotOwner });
 });
 
 app.get("/api/users", authRequired, async (req, res) => {
@@ -443,6 +451,24 @@ app.post("/api/dealtough/analyze", authRequired, ledgerLimiter, async (req, res)
   }
 
   res.json({ deal, affordability });
+});
+
+// ── DoerBot (read-only, owner-only) ──────────────────────
+// Shows Mike his own crypto trading bot's live status inside the app — see
+// doerbot.js for the "why" and the explicit boundary (read-only, single
+// owner). 404, not 403, when the caller isn't the owner: this route should
+// not even reveal it exists to anyone else. isDoerBotOwner (surfaced on
+// /api/me) is what the frontend uses to decide whether to show the tab at
+// all, so a non-owner never issues this request in normal use.
+app.get("/api/doerbot/status", authRequired, async (req, res) => {
+  const isOwner = DOERBOT_OWNER_EMAIL && (req.user.email || "").toLowerCase() === DOERBOT_OWNER_EMAIL;
+  if (!isOwner) return res.status(404).json({ error: "Not found." });
+  if (!doerbotConfigured()) return res.status(503).json({ error: "DoerBot isn't connected right now." });
+  try {
+    res.json(await getDoerBotSummary());
+  } catch (e) {
+    res.status(502).json({ error: e.message || "Couldn't reach DoerBot." });
+  }
 });
 
 // ── billing (Stripe subscriptions) ───────────────────────

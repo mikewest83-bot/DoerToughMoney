@@ -313,6 +313,13 @@ export const api = {
     }),
 
   // ─────────────────────────────────────────────
+  // DOERBOT (read-only, owner-only — see server/doerbot.js)
+  // ─────────────────────────────────────────────
+
+  doerbotStatus: () =>
+    req("/api/doerbot/status"),
+
+  // ─────────────────────────────────────────────
   // GROUPS / SHARED EXPENSES
   // ─────────────────────────────────────────────
 
