@@ -935,6 +935,12 @@ function InsightsTab({ onGoTab }) {
 // ── DealTough (savings / negotiation AI) ─────────────────
 const DEAL_CATEGORIES = ["vehicle", "electronics", "tools", "furniture", "outdoor_equipment"];
 const DEAL_CONDITIONS = ["New", "Like New", "Good", "Fair", "Poor"];
+const AFFORDABILITY_LABEL = {
+  affordable: "You can afford this",
+  tight: "Tight, but close",
+  negotiate_to_afford: "Affordable if you negotiate the price down",
+  out_of_reach: "Out of reach right now",
+};
 function DealsTab({ enabled }) {
   const [form, setForm] = useState({ category: "vehicle", title: "", askingPrice: "", condition: "Good" });
   const [comparables, setComparables] = useState([""]);
@@ -965,8 +971,17 @@ function DealsTab({ enabled }) {
     catch (e) { setErr(e.message); } finally { setLoading(false); }
   };
 
-  const knownKeys = ["verdict", "dealScore", "fairMarketValue"];
-  const extraEntries = result ? Object.entries(result).filter(([k]) => !knownKeys.includes(k)) : [];
+  // The API returns { deal, affordability } — DealTough's deal-quality
+  // verdict and this app's own "can you actually pay for it" verdict, kept
+  // separate on purpose (see server/affordability.js).
+  const deal = result?.deal;
+  const affordability = result?.affordability;
+  const knownKeys = ["verdict", "dealScore", "fairMarketValue", "valuationBasis"];
+  const extraEntries = deal ? Object.entries(deal).filter(([k]) => !knownKeys.includes(k)) : [];
+  // valuationBasis "unknown" means DealTough couldn't price it from the
+  // comparables given — a $0 fairMarketValue in that case isn't a real
+  // valuation, so don't display it as one.
+  const hasValuation = deal && deal.valuationBasis !== "unknown";
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1005,21 +1020,47 @@ function DealsTab({ enabled }) {
         </button>
       </div>
 
-      {result && (
+      {deal && (
         <div style={card}>
-          <p style={sectionLabel}>Result</p>
-          {result.verdict && <p style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{result.verdict}</p>}
+          <p style={sectionLabel}>Is it a good deal?</p>
+          {deal.verdict && <p style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{deal.verdict}</p>}
           <div style={{ display: "flex", gap: 18, marginTop: 6 }}>
-            {result.dealScore != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Deal score</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{result.dealScore}</p></div>}
-            {result.fairMarketValue != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Fair market value</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(result.fairMarketValue)}</p></div>}
+            {deal.dealScore != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Deal score</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{deal.dealScore}</p></div>}
+            {deal.fairMarketValue != null && hasValuation && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Fair market value</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.fairMarketValue)}</p></div>}
           </div>
+          {!hasValuation && (
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
+              Not enough comparable listings to value this one — add a few more prices above for a real estimate.
+            </p>
+          )}
           {extraEntries.length > 0 && (
             <details style={{ marginTop: 10 }}>
               <summary style={{ fontSize: 12.5, color: C.muted, cursor: "pointer" }}>Full response</summary>
               <pre style={{ fontSize: 11.5, background: C.canvas, borderRadius: 10, padding: 10, overflowX: "auto", marginTop: 8 }}>
-                {JSON.stringify(result, null, 2)}
+                {JSON.stringify(deal, null, 2)}
               </pre>
             </details>
+          )}
+        </div>
+      )}
+
+      {deal && (
+        <div style={card}>
+          <p style={sectionLabel}>Can you afford it?</p>
+          {affordability ? (
+            <>
+              <p style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{AFFORDABILITY_LABEL[affordability.verdict] || affordability.verdict}</p>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 4 }}>
+                Safe to spend before your next bills: ${money(affordability.safeToSpendCents / 100)}
+                {affordability.negotiateToCents != null && (
+                  <> — fits if you talk it down to ${money(affordability.negotiateToCents / 100)}</>
+                )}
+              </p>
+            </>
+          ) : (
+            <p style={{ margin: 0, fontSize: 13, color: C.muted }}>
+              Link a bank account to see whether this fits your budget right now.
+            </p>
           )}
         </div>
       )}

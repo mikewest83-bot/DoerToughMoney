@@ -36,6 +36,7 @@ import {
   totalAvailableCents, totalDebtCents, budgetStatus, goalProgress,
 } from "./insights.js";
 import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
+import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
 import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
 
 validateProductionConfig();
@@ -417,12 +418,31 @@ app.get("/api/insights", authRequired, async (req, res) => {
 // itself. Recurring-bill negotiation isn't wired up yet; see dealtough.js.
 app.post("/api/dealtough/analyze", authRequired, ledgerLimiter, async (req, res) => {
   if (!dealtoughConfigured()) return res.status(503).json({ error: "DealTough isn't connected right now." });
+
+  let deal;
   try {
-    const report = await analyzeDeal(req.body || {});
-    res.json(report);
+    deal = await analyzeDeal(req.body || {});
   } catch (e) {
-    res.status(400).json({ error: e.message || "Couldn't analyze that." });
+    return res.status(400).json({ error: e.message || "Couldn't analyze that." });
   }
+
+  // Affordability is a separate, best-effort lookup against the user's own
+  // linked accounts/bills (see affordability.js) — wrapped in its own
+  // try/catch so a DB hiccup here can't take down a deal verdict DealTough
+  // already returned successfully. `affordability: null` just means unknown.
+  let affordability = null;
+  try {
+    const [accounts, bills] = await Promise.all([
+      prisma.account.findMany({ where: { userId: req.user.id } }),
+      prisma.bill.findMany({ where: { userId: req.user.id } }),
+    ]);
+    const safeToSpendCents = computeSafeToSpendCents(accounts, bills);
+    affordability = assessPurchase(deal, req.body?.askingPrice, safeToSpendCents);
+  } catch (e) {
+    console.error("[dealtough] affordability lookup failed:", e.message);
+  }
+
+  res.json({ deal, affordability });
 });
 
 // ── billing (Stripe subscriptions) ───────────────────────
