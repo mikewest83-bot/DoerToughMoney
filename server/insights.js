@@ -3,11 +3,22 @@
 // biggest targets for DealTough to look at. No Prisma, no Express, so it's
 // unit-testable the same way logic.js and groups.js are.
 
+/**
+ * Plaid labels account-to-account movements as TRANSFER_IN / TRANSFER_OUT.
+ * They change cash between accounts but are not income or consumer spending.
+ * Keep this centralized so every insight calculation treats transfers the
+ * same way.
+ */
+export function isTransferTransaction(transaction) {
+  const category = String(transaction?.category || "").trim().toUpperCase();
+  return category === "TRANSFER" || category.startsWith("TRANSFER_");
+}
+
 /** Sum of amountCents for money OUT (positive, per Plaid's convention) in a period. */
 export function spendingByCategory(transactions) {
   const byCategory = {};
   for (const t of transactions) {
-    if (t.amountCents <= 0) continue; // negative = money in (a deposit/refund), not spend
+    if (t.amountCents <= 0 || isTransferTransaction(t)) continue; // deposits/refunds and internal transfers are not spend
     const key = t.category || "Uncategorized";
     byCategory[key] = (byCategory[key] || 0) + t.amountCents;
   }
@@ -16,11 +27,12 @@ export function spendingByCategory(transactions) {
     .sort((a, b) => b.cents - a.cents);
 }
 
-/** Total spend and total income (each as a positive cents figure) for a period. */
+/** Total true spend and true income (each as a positive cents figure) for a period. */
 export function periodSummary(transactions) {
   let spendCents = 0;
   let incomeCents = 0;
   for (const t of transactions) {
+    if (isTransferTransaction(t)) continue;
     if (t.amountCents > 0) spendCents += t.amountCents;
     else incomeCents += -t.amountCents;
   }
