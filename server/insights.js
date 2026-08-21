@@ -14,6 +14,18 @@ export function isTransferTransaction(transaction) {
   return category === "TRANSFER" || category.startsWith("TRANSFER_");
 }
 
+/** Sum of transfer movement in/out, kept separate from true income/spending. */
+export function transferSummary(transactions) {
+  let transferOutCents = 0;
+  let transferInCents = 0;
+  for (const t of transactions) {
+    if (!isTransferTransaction(t)) continue;
+    if (t.amountCents > 0) transferOutCents += t.amountCents;
+    else transferInCents += -t.amountCents;
+  }
+  return { transferOutCents, transferInCents };
+}
+
 /** Sum of amountCents for money OUT (positive, per Plaid's convention) in a period. */
 export function spendingByCategory(transactions) {
   const byCategory = {};
@@ -78,7 +90,7 @@ export function totalAvailableCents(accounts) {
     .reduce((sum, a) => sum + (a.availableBalanceCents ?? a.currentBalanceCents ?? 0), 0);
 }
 
-/** Total owed across credit + loan accounts — "what do I owe." */
+/** Total owed across credit + loan accounts — "what I owe." */
 export function totalDebtCents(accounts) {
   return accounts
     .filter((a) => a.type === "credit" || a.type === "loan")
