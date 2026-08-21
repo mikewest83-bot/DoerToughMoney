@@ -3,7 +3,7 @@ import {
   X, LogOut, Building2, Share2,
   Fingerprint, Plus, Trash2, RefreshCw, ChevronRight, Pencil, Wallet as WalletIcon,
   Receipt, PieChart, Target, TrendingUp, Tag, Users, FileText, Landmark, ArrowUp, ArrowDown, CreditCard,
-  Bot,
+  Bot, AlertTriangle, MessageSquare, Copy, Check, HelpCircle,
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -942,12 +942,28 @@ const AFFORDABILITY_LABEL = {
   negotiate_to_afford: "Affordable if you negotiate the price down",
   out_of_reach: "Out of reach right now",
 };
+// DealTough's DealRecommendation (src/types.ts in the DealTough repo) has a
+// riskLevel of "Low" | "Moderate" | "High" | "Critical" — map each to a soft
+// background + a saturated text color, matching the brandSoft/greenSoft
+// pattern already used elsewhere in this file rather than inventing new tokens.
+const RISK_BADGE = {
+  Low: { bg: C.greenSoft, fg: C.green },
+  Moderate: { bg: "#FBEDD6", fg: C.amber },
+  High: { bg: "#FBE1E6", fg: C.red },
+  Critical: { bg: "#FBE1E6", fg: C.red },
+};
+// breakdown fields (out of /35, /20, /15, /10, /10, /10 — see ScoreBreakdown
+// in DealTough's src/types.ts) shown as a labeled list rather than raw JSON.
+const BREAKDOWN_MAX = { value: 35, risk: 20, trueCost: 15, negotiation: 10, market: 10, confidence: 10 };
+const BREAKDOWN_LABEL = { value: "Value", risk: "Risk", trueCost: "True cost", negotiation: "Negotiation room", market: "Market", confidence: "Confidence" };
+
 function DealsTab({ enabled }) {
   const [form, setForm] = useState({ category: "vehicle", title: "", askingPrice: "", condition: "Good" });
   const [comparables, setComparables] = useState([""]);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState("");
+  const [copied, setCopied] = useState(false);
 
   if (!enabled) {
     return (
@@ -960,7 +976,7 @@ function DealsTab({ enabled }) {
   }
 
   const submit = async () => {
-    setLoading(true); setErr(""); setResult(null);
+    setLoading(true); setErr(""); setResult(null); setCopied(false);
     const payload = {
       category: form.category,
       title: form.title.trim(),
@@ -977,12 +993,24 @@ function DealsTab({ enabled }) {
   // separate on purpose (see server/affordability.js).
   const deal = result?.deal;
   const affordability = result?.affordability;
-  const knownKeys = ["verdict", "dealScore", "fairMarketValue", "valuationBasis"];
-  const extraEntries = deal ? Object.entries(deal).filter(([k]) => !knownKeys.includes(k)) : [];
   // valuationBasis "unknown" means DealTough couldn't price it from the
   // comparables given — a $0 fairMarketValue in that case isn't a real
-  // valuation, so don't display it as one.
+  // valuation, so don't display it (or anything derived from it) as one.
   const hasValuation = deal && deal.valuationBasis !== "unknown";
+  const riskBadge = deal?.riskLevel ? RISK_BADGE[deal.riskLevel] : null;
+  const breakdownEntries = deal?.breakdown ? Object.entries(deal.breakdown).filter(([k]) => k in BREAKDOWN_MAX) : [];
+
+  const copyMessage = async () => {
+    if (!deal?.negotiationMessage) return;
+    try {
+      await navigator.clipboard.writeText(deal.negotiationMessage);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // Clipboard API unavailable/blocked (e.g. insecure context, permission
+      // denied) — no-op. The message is still right there to select by hand.
+    }
+  };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -1023,25 +1051,112 @@ function DealsTab({ enabled }) {
 
       {deal && (
         <div style={card}>
-          <p style={sectionLabel}>Is it a good deal?</p>
-          {deal.verdict && <p style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{deal.verdict}</p>}
-          <div style={{ display: "flex", gap: 18, marginTop: 6 }}>
-            {deal.dealScore != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Deal score</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{deal.dealScore}</p></div>}
-            {deal.fairMarketValue != null && hasValuation && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Fair market value</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.fairMarketValue)}</p></div>}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 10 }}>
+            <div>
+              <p style={sectionLabel}>Is it a good deal?</p>
+              {deal.verdict && <p style={{ fontSize: 18, fontWeight: 700, marginTop: 8 }}>{deal.verdict}</p>}
+            </div>
+            {riskBadge && (
+              <span style={{ fontSize: 12, fontWeight: 700, padding: "5px 11px", borderRadius: 999, background: riskBadge.bg, color: riskBadge.fg, whiteSpace: "nowrap" }}>
+                {deal.riskLevel} risk
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 18, marginTop: 10, flexWrap: "wrap" }}>
+            {deal.dealScore != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Deal score</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{deal.dealScore}/100</p></div>}
+            {hasValuation && deal.fairMarketValue != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Fair market value</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.fairMarketValue)}</p></div>}
+            {deal.confidencePercent != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Confidence</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>{deal.confidencePercent}%</p></div>}
           </div>
           {!hasValuation && (
             <p style={{ fontSize: 12.5, color: C.muted, marginTop: 8 }}>
               Not enough comparable listings to value this one — add a few more prices above for a real estimate.
             </p>
           )}
-          {extraEntries.length > 0 && (
-            <details style={{ marginTop: 10 }}>
-              <summary style={{ fontSize: 12.5, color: C.muted, cursor: "pointer" }}>Full response</summary>
-              <pre style={{ fontSize: 11.5, background: C.canvas, borderRadius: 10, padding: 10, overflowX: "auto", marginTop: 8 }}>
-                {JSON.stringify(deal, null, 2)}
-              </pre>
-            </details>
+          {hasValuation && deal.estimatedSavings > 0 && (
+            <p style={{ fontSize: 12.5, color: C.green, marginTop: 8, fontWeight: 600 }}>
+              Up to ${money(deal.estimatedSavings)} in potential savings if you negotiate down to target.
+            </p>
           )}
+        </div>
+      )}
+
+      {deal && hasValuation && (deal.openingOffer != null || deal.targetPrice != null || deal.walkAwayPrice != null) && (
+        <div style={card}>
+          <p style={sectionLabel}>How to negotiate</p>
+          <div style={{ display: "flex", gap: 18, marginTop: 10, flexWrap: "wrap" }}>
+            {deal.openingOffer != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Open with</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.openingOffer)}</p></div>}
+            {deal.targetPrice != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Target</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.targetPrice)}</p></div>}
+            {deal.walkAwayPrice != null && <div><p style={{ margin: 0, fontSize: 12, color: C.muted }}>Walk away above</p><p style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>${money(deal.walkAwayPrice)}</p></div>}
+          </div>
+          {deal.negotiationMessage && (
+            <>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 14, marginBottom: 6, display: "flex", alignItems: "center", gap: 5 }}>
+                <MessageSquare size={13} /> Message to send the seller
+              </p>
+              <p style={{ fontSize: 14, lineHeight: 1.5, background: C.canvas, borderRadius: 12, padding: 12, margin: 0, whiteSpace: "pre-wrap" }}>
+                {deal.negotiationMessage}
+              </p>
+              <button onClick={copyMessage} style={{ ...lightPill, marginTop: 10 }}>
+                {copied ? <><Check size={13} /> Copied</> : <><Copy size={13} /> Copy message</>}
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {deal && Array.isArray(deal.topRisks) && deal.topRisks.length > 0 && (
+        <div style={card}>
+          <p style={sectionLabel}>Watch out for</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+            {deal.topRisks.map((risk, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <AlertTriangle size={15} color={riskBadge?.fg || C.amber} style={{ marginTop: 1, flexShrink: 0 }} />
+                <p style={{ margin: 0, fontSize: 13.5 }}>{risk}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {deal && Array.isArray(deal.sellerQuestions) && deal.sellerQuestions.length > 0 && (
+        <div style={card}>
+          <p style={sectionLabel}>Ask the seller</p>
+          <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 10 }}>
+            {deal.sellerQuestions.map((q, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+                <HelpCircle size={15} color={C.muted} style={{ marginTop: 1, flexShrink: 0 }} />
+                <p style={{ margin: 0, fontSize: 13.5 }}>{q}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {deal && ((Array.isArray(deal.reasons) && deal.reasons.length > 0) || breakdownEntries.length > 0) && (
+        <div style={card}>
+          <details>
+            <summary style={{ fontSize: 12.5, color: C.muted, cursor: "pointer", fontWeight: 600 }}>Why this score</summary>
+            {Array.isArray(deal.reasons) && deal.reasons.length > 0 && (
+              <ul style={{ margin: "10px 0 0", paddingLeft: 18, fontSize: 13, lineHeight: 1.6 }}>
+                {deal.reasons.map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+            )}
+            {breakdownEntries.length > 0 && (
+              <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 6 }}>
+                {breakdownEntries.map(([k, v]) => (
+                  <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 12.5 }}>
+                    <span style={{ color: C.muted }}>{BREAKDOWN_LABEL[k] || k}</span>
+                    <span style={{ fontWeight: 600 }}>{v}/{BREAKDOWN_MAX[k]}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {Array.isArray(deal.assumptions) && deal.assumptions.length > 0 && (
+              <p style={{ fontSize: 11.5, color: C.muted, marginTop: 12, marginBottom: 0 }}>
+                Assumptions: {deal.assumptions.join(" · ")}
+              </p>
+            )}
+          </details>
         </div>
       )}
 
