@@ -99,6 +99,7 @@ root.render(
   <React.StrictMode>
     <AppErrorBoundary>
       <AppEntry />
+      <MikeWidget />
     </AppErrorBoundary>
   </React.StrictMode>
 );
