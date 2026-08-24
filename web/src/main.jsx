@@ -2,6 +2,7 @@ import "./launch-polish.css";
 import React, { useState } from "react";
 import { createRoot } from "react-dom/client";
 import { hasToken } from "./api.js";
+import MikeWidget from "./MikeWidget.jsx";
 
 const rootElement = document.getElementById("root");
 const root = createRoot(rootElement);
