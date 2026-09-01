@@ -1336,9 +1336,14 @@ function BillingTab({ enabled }) {
           </p>
         )}
         {!isPro && (
-          <p style={{ fontSize: 13.5, color: C.muted, marginTop: 6 }}>
-            Upgrade for AI-driven coaching, cash-flow forecasts, and affordability checks.
-          </p>
+          <>
+            <p style={{ fontSize: 26, fontWeight: 800, marginTop: 10, letterSpacing: "-0.02em" }}>
+              $9.99<span style={{ fontSize: 14, fontWeight: 600, color: C.muted }}> /month</span>
+            </p>
+            <p style={{ fontSize: 13.5, color: C.muted, marginTop: 6 }}>
+              Cash-flow forecasts, affordability checks before you buy, and spending broken down by category. Cancel anytime.
+            </p>
+          </>
         )}
         {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
         <button onClick={() => go(isPro ? api.billingPortal : api.billingCheckout)} disabled={busy}
