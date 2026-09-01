@@ -46,6 +46,45 @@ function LaunchLanding({ onContinue }) {
         <div><span className="dt-benefit-icon">%</span><h3>DealTough</h3><p>Spot opportunities to lower the costs you’re already paying.</p></div>
       </section>
 
+      {/* Every line here names something server/entitlements.js actually
+          gates. If a feature moves in or out of that file, this table moves
+          with it — a pricing page that oversells what it gates is how you
+          earn a chargeback. */}
+      <section className="dt-pricing">
+        <div className="dt-pricing-head">
+          <h2>Start free. Upgrade when it pays for itself.</h2>
+          <p>No trial countdown, no card to look around.</p>
+        </div>
+        <div className="dt-plans">
+          <div className="dt-plan">
+            <div className="dt-plan-name">Free</div>
+            <div className="dt-plan-price">$0</div>
+            <ul>
+              <li>One connected bank</li>
+              <li>Accounts, balances and transactions</li>
+              <li>Budgets and goals</li>
+              <li>DealTough deal check</li>
+              <li>Shared expenses</li>
+            </ul>
+            <button className="dt-secondary dt-plan-cta" onClick={() => onContinue("/signup")}>Get started free</button>
+          </div>
+
+          <div className="dt-plan dt-plan-featured">
+            <div className="dt-plan-name">Pro</div>
+            <div className="dt-plan-price">$9.99<small>/month</small></div>
+            <ul>
+              <li>Everything in Free</li>
+              <li>Unlimited bank connections</li>
+              <li>Insights — spending by category, month over month</li>
+              <li>Bills, and which are worth renegotiating</li>
+              <li>Affordability — what&rsquo;s safe to spend before your next bills</li>
+            </ul>
+            <button className="dt-primary dt-plan-cta" onClick={() => onContinue("/signup")}>Get started <span>&rarr;</span></button>
+            <p className="dt-plan-note">Cancel anytime.</p>
+          </div>
+        </div>
+      </section>
+
       <section className="dt-bottom-line">
         <div><strong>One place for the money decisions that matter.</strong><span>Connect your bank. See the picture. Do the next right thing.</span></div>
         <button className="dt-primary dt-primary-small" onClick={() => onContinue("/signup")}>Build your money advantage <span>→</span></button>
