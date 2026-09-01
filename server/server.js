@@ -39,6 +39,7 @@ import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
 import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
 import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
 import { doerbotConfigured, getDoerBotSummary } from "./doerbot.js";
+import { proRequired, hasPaidAccess, canLinkAnotherBank, upgradeRequired, freeBankLimit, paywallEnabled } from "./entitlements.js";
 
 validateProductionConfig();
 
@@ -124,7 +125,17 @@ app.get("/api/me", authRequired, (req, res) => {
   const isDoerBotOwner = Boolean(
     DOERBOT_OWNER_EMAIL && (req.user.email || "").toLowerCase() === DOERBOT_OWNER_EMAIL
   );
-  res.json({ user: publicUser(req.user), isDoerBotOwner });
+  // Entitlement state is reported by the same code the routes gate on, so
+  // the UI can never show an unlocked feature the API would refuse.
+  res.json({
+    user: publicUser(req.user),
+    isDoerBotOwner,
+    entitlements: {
+      paid: hasPaidAccess(req.user),
+      paywallEnabled: paywallEnabled(),
+      freeBankLimit: freeBankLimit(),
+    },
+  });
 });
 
 app.get("/api/users", authRequired, async (req, res) => {
@@ -148,6 +159,18 @@ app.post("/api/plaid/exchange", authRequired, plaidLimiter, idempotency, async (
   if (!plaidConfigured()) return res.status(503).json({ error: "Bank linking isn't available right now." });
   const { publicToken } = req.body || {};
   if (!publicToken) return res.status(400).json({ error: "Missing publicToken." });
+
+  // Plaid bills per connected Item, so a free account's bank count is the
+  // one limit that keeps our cost and our price pointed the same way.
+  // Checked before the exchange, never after — an exchanged token we then
+  // refuse to store would be a bank connection the user is billed for and
+  // can't see.
+  const bankCount = await prisma.plaidItem.count({ where: { userId: req.user.id } });
+  if (!canLinkAnotherBank(req.user, bankCount)) {
+    const limit = freeBankLimit();
+    return upgradeRequired(res,
+      `Free accounts can link ${limit} bank${limit === 1 ? "" : "s"}. Upgrade to connect more.`);
+  }
 
   const { accessToken, plaidItemId, institutionId, institutionName } = await exchangePublicToken(publicToken);
   const item = await prisma.plaidItem.create({
@@ -238,7 +261,7 @@ app.patch("/api/transactions/:id", authRequired, ledgerLimiter, async (req, res)
 });
 
 // ── bills ─────────────────────────────────────────────────
-app.get("/api/bills", authRequired, async (req, res) => {
+app.get("/api/bills", authRequired, proRequired, async (req, res) => {
   const bills = await prisma.bill.findMany({ where: { userId: req.user.id }, orderBy: { amountCents: "desc" } });
   res.json({
     bills: bills.map((b) => ({
@@ -251,7 +274,7 @@ app.get("/api/bills", authRequired, async (req, res) => {
   });
 });
 
-app.post("/api/bills", authRequired, ledgerLimiter, async (req, res) => {
+app.post("/api/bills", authRequired, proRequired, ledgerLimiter, async (req, res) => {
   const { name, category, amount, cadence, nextDueOn } = req.body || {};
   const v = validateAmount(amount);
   if (!v.ok) return res.status(400).json({ error: v.error });
@@ -269,7 +292,7 @@ app.post("/api/bills", authRequired, ledgerLimiter, async (req, res) => {
   res.status(201).json({ bill: { id: bill.id, name: bill.name, amount: bill.amountCents / 100 } });
 });
 
-app.patch("/api/bills/:id", authRequired, ledgerLimiter, async (req, res) => {
+app.patch("/api/bills/:id", authRequired, proRequired, ledgerLimiter, async (req, res) => {
   const bill = await prisma.bill.findUnique({ where: { id: req.params.id } });
   if (!bill || bill.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
 
@@ -290,7 +313,7 @@ app.patch("/api/bills/:id", authRequired, ledgerLimiter, async (req, res) => {
   res.json({ bill: { id: updated.id, name: updated.name, amount: updated.amountCents / 100, active: updated.active } });
 });
 
-app.delete("/api/bills/:id", authRequired, async (req, res) => {
+app.delete("/api/bills/:id", authRequired, proRequired, async (req, res) => {
   const bill = await prisma.bill.findUnique({ where: { id: req.params.id } });
   if (!bill || bill.userId !== req.user.id) return res.status(404).json({ error: "Not found." });
   await prisma.bill.delete({ where: { id: bill.id } });
@@ -398,7 +421,7 @@ app.delete("/api/goals/:id", authRequired, async (req, res) => {
 // ── insights ──────────────────────────────────────────────
 // "What's my financial trajectory": this month vs last month by category,
 // plus which bills are the best DealTough candidates.
-app.get("/api/insights", authRequired, async (req, res) => {
+app.get("/api/insights", authRequired, proRequired, async (req, res) => {
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
   const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -438,7 +461,14 @@ app.post("/api/dealtough/analyze", authRequired, ledgerLimiter, async (req, res)
   // linked accounts/bills (see affordability.js) — wrapped in its own
   // try/catch so a DB hiccup here can't take down a deal verdict DealTough
   // already returned successfully. `affordability: null` just means unknown.
+  // The deal verdict is free for everyone — it's the hook, and it costs us
+  // nothing per call beyond DealTough's own budget. Joining it to the user's
+  // real balances is the paid half, so a free account gets a verdict and an
+  // honest "upgrade to see whether you can actually afford it".
   let affordability = null;
+  if (!hasPaidAccess(req.user)) {
+    return res.json({ deal, affordability: null, affordabilityLocked: true });
+  }
   try {
     const [accounts, bills] = await Promise.all([
       prisma.account.findMany({ where: { userId: req.user.id } }),

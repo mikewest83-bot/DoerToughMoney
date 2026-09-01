@@ -3,7 +3,7 @@ import {
   X, LogOut, Building2, Share2,
   Fingerprint, Plus, Trash2, RefreshCw, ChevronRight, Pencil, Wallet as WalletIcon,
   Receipt, PieChart, Target, TrendingUp, Tag, Users, FileText, Landmark, ArrowUp, ArrowDown, CreditCard,
-  Bot, AlertTriangle, MessageSquare, Copy, Check, HelpCircle,
+  Bot, AlertTriangle, MessageSquare, Copy, Check, HelpCircle, Lock, ShieldCheck,
 } from "lucide-react";
 import { usePlaidLink } from "react-plaid-link";
 import { startAuthentication, startRegistration } from "@simplewebauthn/browser";
@@ -101,7 +101,7 @@ function BankLoginLauncher({ linkToken, onLinked, onError, onExit }) {
 }
 
 // ── Auth screen ──────────────────────────────────────────
-function Auth({ onDone, initialMode = "login" }) {
+function Auth({ onDone, initialMode = "login", onBack }) {
   const [mode, setMode] = useState(initialMode);
   const [form, setForm] = useState({ name: "", handle: "", email: "", password: "" });
   const [err, setErr] = useState("");
@@ -214,7 +214,13 @@ function Auth({ onDone, initialMode = "login" }) {
       justifyContent: "center", padding: 24, fontFamily: "Inter, sans-serif", color: C.ink }}>
       {fontStyle}
       <div style={{ maxWidth: 400, width: "100%", margin: "0 auto" }}>
-        <div style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800, fontSize: 34, letterSpacing: "-0.03em" }}>
+        {/* The wordmark doubles as the way out. Someone who taps "create an
+            account" and changes their mind would otherwise be stranded on a
+            form with no back button — the page isn't routed, so the
+            browser's own back button can't rescue them either. */}
+        <div onClick={onBack} role={onBack ? "button" : undefined}
+          style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800, fontSize: 34,
+            letterSpacing: "-0.03em", cursor: onBack ? "pointer" : "default", display: "inline-block" }}>
           DoerTough<span style={{ color: C.brand }}>Money</span>
         </div>
         <p style={{ color: C.muted, fontSize: 15, marginTop: 4 }}>Your money. Your decisions. Your advantage.</p>
@@ -315,6 +321,28 @@ const sheetInput = { width: "100%", border: "none", outline: "none", background:
 const card = { borderRadius: 20, padding: 16, background: C.surface, border: `1px solid ${C.line}` };
 const sectionLabel = { fontSize: 13, fontWeight: 700, color: C.muted, textTransform: "uppercase", letterSpacing: "0.06em", margin: 0 };
 
+// Shown in place of a tab's contents when the API answered 402. The server
+// is the only thing that decides this — we render it in response to a real
+// refusal rather than guessing from a locally-held tier, so the screen can
+// never claim access the API would deny (or deny access it would allow).
+function ProLock({ title, blurb, onGoTab }) {
+  return (
+    <div style={{ ...card, textAlign: "center", padding: "30px 22px" }}>
+      <div style={{ width: 46, height: 46, borderRadius: 14, background: C.greenSoft, display: "flex",
+        alignItems: "center", justifyContent: "center", margin: "0 auto 14px" }}>
+        <Lock size={20} color={C.brand} />
+      </div>
+      <p style={{ margin: 0, fontWeight: 700, fontSize: 16.5 }}>{title}</p>
+      <p style={{ margin: "8px auto 0", fontSize: 13.5, color: C.muted, lineHeight: 1.5, maxWidth: 330 }}>{blurb}</p>
+      <button onClick={() => onGoTab?.("billing")}
+        style={{ marginTop: 18, padding: "12px 22px", borderRadius: 14, border: "none",
+          background: C.brand, color: "#fff", fontWeight: 700, fontSize: 14.5, cursor: "pointer" }}>
+        See DoerToughMoney Pro — $9.99/mo
+      </button>
+    </div>
+  );
+}
+
 // A bottom sheet used for every add/edit form across the finance tabs.
 function SimpleSheet({ title, onClose, children }) {
   return (
@@ -346,8 +374,12 @@ const TABS = [
 ];
 
 // ── Home ─────────────────────────────────────────────────
-function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable, onGoTab }) {
+function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable, onGoTab, showProNudge }) {
   const top3 = (insights?.byCategory || []).slice(0, 3);
+  // On a free account the "This month" card can't render, because insights
+  // is gated. Leaving a hole there reads as a broken screen, so say what's
+  // missing and what it costs instead.
+  const proNudge = showProNudge && !insights?.thisMonth;
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ ...card, background: "linear-gradient(135deg, #16151A 0%, #25232A 100%)", color: "#fff", border: "none", borderRadius: 24, padding: "24px 26px" }}>
@@ -358,6 +390,24 @@ function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable,
           <Landmark size={14} /> {accounts.length === 0 ? "Connect a bank" : `${accounts.length} account${accounts.length === 1 ? "" : "s"} linked`}
         </button>
       </div>
+
+      {proNudge && (
+        <div style={{ ...card, display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <div style={{ width: 34, height: 34, borderRadius: 11, background: C.greenSoft, display: "flex",
+            alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            <TrendingUp size={16} color={C.brand} />
+          </div>
+          <div style={{ minWidth: 0 }}>
+            <p style={{ margin: 0, fontWeight: 700, fontSize: 14.5 }}>See where the month went</p>
+            <p style={{ margin: "5px 0 0", fontSize: 13, color: C.muted, lineHeight: 1.5 }}>
+              Spending by category, bills worth renegotiating, and what's safe to spend — $9.99/mo.
+            </p>
+            <button onClick={() => onGoTab("billing")} style={{ ...lightPill, marginTop: 10 }}>
+              See Pro <ChevronRight size={14} />
+            </button>
+          </div>
+        </div>
+      )}
 
       {insights?.thisMonth && (
         <div style={card}>
@@ -613,6 +663,7 @@ function BillsTab({ onGoTab }) {
   const [topNegotiable, setTopNegotiable] = useState([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [locked, setLocked] = useState(false);
   const [editing, setEditing] = useState(null); // {} for new, {...bill} for edit
   const [form, setForm] = useState({ name: "", category: "", amount: "", cadence: "MONTHLY", nextDueOn: "" });
   const [saving, setSaving] = useState(false);
@@ -623,7 +674,9 @@ function BillsTab({ onGoTab }) {
       const r = await api.bills();
       setBills(r.bills || []);
       setTopNegotiable(r.topNegotiable || []);
-    } catch (e) { setErr(e.message); } finally { setLoading(false); }
+    } catch (e) {
+      if (e.code === "upgrade_required") setLocked(true); else setErr(e.message);
+    } finally { setLoading(false); }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -645,6 +698,12 @@ function BillsTab({ onGoTab }) {
   const remove = async (id) => {
     try { await api.deleteBill(id); await load(); } catch (e) { setErr(e.message); }
   };
+
+  if (loading) return <p style={{ color: C.muted, fontSize: 14 }}>Loading…</p>;
+  if (locked) return (
+    <ProLock onGoTab={onGoTab} title="Bills is part of Pro"
+      blurb="Track every recurring bill in one place, and see which ones are worth calling to renegotiate." />
+  );
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -864,12 +923,20 @@ function InsightsTab({ onGoTab }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState("");
+  const [locked, setLocked] = useState(false);
 
   useEffect(() => {
-    api.insights().then(setData).catch((e) => setErr(e.message)).finally(() => setLoading(false));
+    api.insights()
+      .then(setData)
+      .catch((e) => { if (e.code === "upgrade_required") setLocked(true); else setErr(e.message); })
+      .finally(() => setLoading(false));
   }, []);
 
   if (loading) return <p style={{ color: C.muted, fontSize: 14 }}>Loading…</p>;
+  if (locked) return (
+    <ProLock onGoTab={onGoTab} title="Insights is part of Pro"
+      blurb="See where the month actually went — spending broken down by category, and what changed since last month." />
+  );
   if (err) return <p style={{ color: C.red, fontSize: 13 }}>{err}</p>;
   if (!data) return null;
 
@@ -957,7 +1024,7 @@ const RISK_BADGE = {
 const BREAKDOWN_MAX = { value: 35, risk: 20, trueCost: 15, negotiation: 10, market: 10, confidence: 10 };
 const BREAKDOWN_LABEL = { value: "Value", risk: "Risk", trueCost: "True cost", negotiation: "Negotiation room", market: "Market", confidence: "Confidence" };
 
-function DealsTab({ enabled }) {
+function DealsTab({ enabled, onGoTab }) {
   const [form, setForm] = useState({ category: "vehicle", title: "", askingPrice: "", condition: "Good" });
   const [comparables, setComparables] = useState([""]);
   const [result, setResult] = useState(null);
@@ -993,6 +1060,10 @@ function DealsTab({ enabled }) {
   // separate on purpose (see server/affordability.js).
   const deal = result?.deal;
   const affordability = result?.affordability;
+  // Server-set: the deal verdict came back fine, but joining it to real
+  // balances is the paid half. Distinct from affordability === null, which
+  // means "no linked bank" — two different fixes, so two different messages.
+  const affordabilityLocked = result?.affordabilityLocked === true;
   // valuationBasis "unknown" means DealTough couldn't price it from the
   // comparables given — a $0 fairMarketValue in that case isn't a real
   // valuation, so don't display it (or anything derived from it) as one.
@@ -1173,6 +1244,17 @@ function DealsTab({ enabled }) {
                 )}
               </p>
             </>
+          ) : affordabilityLocked ? (
+            <>
+              <p style={{ margin: "8px 0 0", fontSize: 13.5, color: C.muted, lineHeight: 1.5 }}>
+                The deal verdict above is free. Checking it against your actual balances —
+                what's safe to spend before your next bills land — is part of Pro.
+              </p>
+              <button onClick={() => onGoTab?.("billing")}
+                style={{ ...lightPill, marginTop: 12 }}>
+                <Lock size={13} /> See Pro — $9.99/mo
+              </button>
+            </>
           ) : (
             <p style={{ margin: 0, fontSize: 13, color: C.muted }}>
               Link a bank account to see whether this fits your budget right now.
@@ -1340,9 +1422,24 @@ function BillingTab({ enabled }) {
             <p style={{ fontSize: 26, fontWeight: 800, marginTop: 10, letterSpacing: "-0.02em" }}>
               $9.99<span style={{ fontSize: 14, fontWeight: 600, color: C.muted }}> /month</span>
             </p>
-            <p style={{ fontSize: 13.5, color: C.muted, marginTop: 6 }}>
-              Cash-flow forecasts, affordability checks before you buy, and spending broken down by category. Cancel anytime.
-            </p>
+            {/* Every line here names something the API actually gates. If a
+                feature moves in or out of entitlements.js, this list moves
+                with it — a plan card that overstates what it sells is how
+                you earn a chargeback. */}
+            <ul style={{ margin: "10px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 7 }}>
+              {[
+                "Connect as many banks as you want",
+                "Insights — spending by category, and what changed since last month",
+                "Bills in one place, and which are worth renegotiating",
+                "Affordability — what's safe to spend before your next bills land",
+              ].map((line) => (
+                <li key={line} style={{ display: "flex", gap: 8, fontSize: 13.5, color: C.muted, lineHeight: 1.45 }}>
+                  <Check size={15} color={C.brand} style={{ flexShrink: 0, marginTop: 2 }} />
+                  <span>{line}</span>
+                </li>
+              ))}
+            </ul>
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>Cancel anytime.</p>
           </>
         )}
         {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
@@ -1356,9 +1453,167 @@ function BillingTab({ enabled }) {
 }
 
 // ── Main authenticated shell ─────────────────────────────
-function Home({ initialAuthMode = "login" }) {
+// ── Landing ──────────────────────────────────────────────
+// What a stranger sees at doertoughmoney.com. Before this existed the root
+// URL was a bare sign-in form, which asks people to create an account for a
+// product they've been told nothing about. Everything claimed below is a
+// feature that ships today — no forecasts, no "AI", no roadmap items
+// written in the present tense.
+function Landing({ onStart }) {
+  const features = [
+    { Icon: Landmark, t: "Your accounts in one place",
+      d: "Connect your bank through Plaid and see balances and what you owe together, instead of four apps and a guess." },
+    { Icon: Receipt, t: "Every transaction, sorted",
+      d: "Spending lands categorized automatically, so you can see where the month actually went." },
+    { Icon: Tag, t: "Know before you buy",
+      d: "Paste any listing and DealTough tells you what it's worth, what to offer, and when to walk away." },
+    { Icon: FileText, t: "Bills you can act on",
+      d: "Track what's recurring and see which bills are big enough to be worth a phone call." },
+    { Icon: Target, t: "Budgets and goals that use real numbers",
+      d: "Built from the money actually moving through your accounts, not what you meant to spend." },
+    { Icon: Users, t: "Shared costs, settled",
+      d: "Split expenses with a group, track who owes what, and nudge people without the awkward text." },
+  ];
+
+  const H = ({ children, style }) => (
+    <h2 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800,
+      letterSpacing: "-0.03em", margin: 0, ...style }}>{children}</h2>
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: pageBg, fontFamily: "Inter, system-ui, sans-serif", color: C.ink }}>
+      {fontStyle}
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: "22px 22px 60px" }}>
+
+        <header style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontWeight: 800, fontSize: 21, letterSpacing: "-0.03em" }}>
+            DoerTough<span style={{ color: C.brand }}>Money</span>
+          </span>
+          <button onClick={() => onStart("login")}
+            style={{ background: "none", border: "none", color: C.ink, fontSize: 14.5, fontWeight: 600, cursor: "pointer", padding: "8px 4px" }}>
+            Sign in
+          </button>
+        </header>
+
+        <section style={{ marginTop: 46, textAlign: "center" }}>
+          <H style={{ fontSize: "clamp(32px, 7vw, 46px)", lineHeight: 1.08 }}>
+            Your money.<br />Your decisions.<br /><span style={{ color: C.brand }}>Your advantage.</span>
+          </H>
+          <p style={{ fontSize: 16.5, color: C.muted, lineHeight: 1.55, margin: "18px auto 0", maxWidth: 460 }}>
+            Connect your bank and DoerToughMoney shows you what you actually have,
+            where it's going, and whether you can afford the thing you're about to buy.
+          </p>
+          <button onClick={() => onStart("register")}
+            style={{ marginTop: 26, padding: "15px 30px", borderRadius: 15, border: "none",
+              background: C.brand, color: "#fff", fontWeight: 700, fontSize: 16, cursor: "pointer" }}>
+            Create a free account
+          </button>
+          <p style={{ fontSize: 13, color: C.muted, marginTop: 12 }}>
+            Free to start. One bank connection, no card required.
+          </p>
+        </section>
+
+        <section style={{ marginTop: 54, display: "grid", gap: 12,
+          gridTemplateColumns: "repeat(auto-fit, minmax(232px, 1fr))" }}>
+          {features.map(({ Icon, t, d }) => (
+            <div key={t} style={card}>
+              <div style={{ width: 36, height: 36, borderRadius: 11, background: C.greenSoft,
+                display: "flex", alignItems: "center", justifyContent: "center" }}>
+                <Icon size={17} color={C.brand} />
+              </div>
+              <p style={{ margin: "12px 0 0", fontWeight: 700, fontSize: 15 }}>{t}</p>
+              <p style={{ margin: "6px 0 0", fontSize: 13.5, color: C.muted, lineHeight: 1.5 }}>{d}</p>
+            </div>
+          ))}
+        </section>
+
+        {/* The pricing table has to agree with entitlements.js, or the first
+            person who pays finds out we were wrong. */}
+        <section style={{ marginTop: 54 }}>
+          <H style={{ fontSize: 27, textAlign: "center" }}>Simple pricing</H>
+          <div style={{ marginTop: 20, display: "grid", gap: 12,
+            gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))" }}>
+
+            <div style={card}>
+              <p style={sectionLabel}>Free</p>
+              <p style={{ fontSize: 27, fontWeight: 800, margin: "8px 0 0", letterSpacing: "-0.02em" }}>$0</p>
+              <ul style={{ margin: "14px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+                {["One connected bank", "Accounts, balances and transactions",
+                  "Budgets and goals", "DealTough deal check", "Shared expenses"].map((l) => (
+                  <li key={l} style={{ display: "flex", gap: 8, fontSize: 13.5, color: C.muted, lineHeight: 1.45 }}>
+                    <Check size={15} color={C.brand} style={{ flexShrink: 0, marginTop: 2 }} /><span>{l}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div style={{ ...card, border: `2px solid ${C.brand}` }}>
+              <p style={{ ...sectionLabel, color: C.brand }}>Pro</p>
+              <p style={{ fontSize: 27, fontWeight: 800, margin: "8px 0 0", letterSpacing: "-0.02em" }}>
+                $9.99<span style={{ fontSize: 14, fontWeight: 600, color: C.muted }}> /month</span>
+              </p>
+              <ul style={{ margin: "14px 0 0", padding: 0, listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
+                {["Everything in Free", "Unlimited bank connections",
+                  "Insights — spending by category, month over month",
+                  "Bills, and which are worth renegotiating",
+                  "Affordability — what's safe to spend before your next bills"].map((l) => (
+                  <li key={l} style={{ display: "flex", gap: 8, fontSize: 13.5, color: C.muted, lineHeight: 1.45 }}>
+                    <Check size={15} color={C.brand} style={{ flexShrink: 0, marginTop: 2 }} /><span>{l}</span>
+                  </li>
+                ))}
+              </ul>
+              <p style={{ fontSize: 12.5, color: C.muted, marginTop: 12 }}>Cancel anytime.</p>
+            </div>
+          </div>
+        </section>
+
+        <section style={{ ...card, marginTop: 30, display: "flex", gap: 12, alignItems: "flex-start" }}>
+          <ShieldCheck size={19} color={C.brand} style={{ flexShrink: 0, marginTop: 1 }} />
+          <p style={{ margin: 0, fontSize: 13.5, color: C.muted, lineHeight: 1.55 }}>
+            Bank connections run through <strong style={{ color: C.ink }}>Plaid</strong>, the same service
+            your other finance apps use. We never see or store your bank login, and DoerToughMoney
+            can't move money — it only reads.
+          </p>
+        </section>
+
+        <section style={{ marginTop: 40, textAlign: "center" }}>
+          <H style={{ fontSize: 23 }}>Start with one bank. See where you stand.</H>
+          <button onClick={() => onStart("register")}
+            style={{ marginTop: 18, padding: "15px 30px", borderRadius: 15, border: "none",
+              background: C.brand, color: "#fff", fontWeight: 700, fontSize: 16, cursor: "pointer" }}>
+            Create a free account
+          </button>
+          <p style={{ fontSize: 13.5, color: C.muted, marginTop: 14 }}>
+            Already have one?{" "}
+            <button onClick={() => onStart("login")}
+              style={{ background: "none", border: "none", color: C.brand, fontSize: 13.5, fontWeight: 600, cursor: "pointer", padding: 0 }}>
+              Sign in
+            </button>
+          </p>
+        </section>
+
+        <footer style={{ marginTop: 46, paddingTop: 20, borderTop: `1px solid ${C.line}`,
+          display: "flex", gap: 16, justifyContent: "center", flexWrap: "wrap" }}>
+          <a href="/terms" style={{ fontSize: 12.5, color: C.muted, textDecoration: "none" }}>Terms</a>
+          <a href="/privacy" style={{ fontSize: 12.5, color: C.muted, textDecoration: "none" }}>Privacy</a>
+          <a href="https://www.doertough.com" style={{ fontSize: 12.5, color: C.muted, textDecoration: "none" }}>Doer Tough</a>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function Home({ initialAuthMode = "login", startOnAuth = false }) {
   const [user, setUser] = useState(null);
+  // A signed-out visitor gets the landing page first; /login and /signup
+  // still go straight to the form so a returning user's bookmark, and any
+  // link we hand out, land exactly where they expect.
+  const [showAuth, setShowAuth] = useState(startOnAuth);
+  const [authMode, setAuthMode] = useState(initialAuthMode);
   const [isDoerBotOwner, setIsDoerBotOwner] = useState(false);
+  // Comes straight from /api/me, which computes it with the same code the
+  // routes gate on — never inferred client-side.
+  const [entitlements, setEntitlements] = useState(null);
   const [ready, setReady] = useState(false);
   const [cfg, setCfg] = useState({ plaidEnabled: false, dealtoughEnabled: false, stripeEnabled: false });
   const [tab, setTab] = useState("home");
@@ -1403,20 +1658,30 @@ function Home({ initialAuthMode = "login" }) {
   const dismissEnroll = () => { localStorage.setItem("even_passkey_prompt_dismissed", "1"); setEnrollDismissed(true); };
 
   const loadOverview = useCallback(async () => {
-    try {
-      const [a, i] = await Promise.all([api.accounts(), api.insights()]);
-      setAccounts(a.accounts || []);
-      setTotalAvailable(a.totalAvailable || 0);
-      setTotalDebt(a.totalDebt || 0);
-      setInsights({ thisMonth: i.thisMonth, byCategory: i.byCategory });
-      setTopNegotiable(i.topNegotiableBills || []);
-    } catch { /* accounts/insights are best-effort on the home screen */ }
+    // Settled, not all-or-nothing: insights is a paid feature, so for a free
+    // account it answers 402 every time. Promise.all would let that refusal
+    // throw away the accounts response too and leave Home looking empty for
+    // everyone who hasn't paid.
+    const [acc, ins] = await Promise.allSettled([api.accounts(), api.insights()]);
+    if (acc.status === "fulfilled") {
+      setAccounts(acc.value.accounts || []);
+      setTotalAvailable(acc.value.totalAvailable || 0);
+      setTotalDebt(acc.value.totalDebt || 0);
+    }
+    if (ins.status === "fulfilled") {
+      setInsights({ thisMonth: ins.value.thisMonth, byCategory: ins.value.byCategory });
+      setTopNegotiable(ins.value.topNegotiableBills || []);
+    } else {
+      setInsights(null);
+      setTopNegotiable([]);
+    }
   }, []);
 
   const refresh = useCallback(async () => {
-    const { user, isDoerBotOwner } = await api.me();
+    const { user, isDoerBotOwner, entitlements } = await api.me();
     setUser(user);
     setIsDoerBotOwner(!!isDoerBotOwner);
+    setEntitlements(entitlements || null);
     try { setHasPasskey((await api.passkeyCredentials()).credentials.length > 0); } catch {}
     await loadOverview();
   }, [loadOverview]);
@@ -1432,7 +1697,13 @@ function Home({ initialAuthMode = "login" }) {
   const signOut = () => { setToken(null); setUser(null); };
 
   if (!ready) return <div style={{ minHeight: "100vh", background: pageBg }}>{fontStyle}</div>;
-  if (!user) return <Auth onDone={(u) => { setUser(u); refresh(); }} initialMode={initialAuthMode} />;
+  if (!user && !showAuth) {
+    return <Landing onStart={(mode) => { setAuthMode(mode); setShowAuth(true); }} />;
+  }
+  if (!user) return (
+    <Auth onDone={(u) => { setUser(u); refresh(); }} initialMode={authMode}
+      onBack={startOnAuth ? undefined : () => setShowAuth(false)} />
+  );
 
   return (
     <div style={{ minHeight: "100vh", background: pageBg, display: "flex", justifyContent: "center",
@@ -1490,7 +1761,8 @@ function Home({ initialAuthMode = "login" }) {
         <section style={{ padding: "20px 28px 56px" }}>
           {tab === "home" && (
             <HomeTab accounts={accounts} totalAvailable={totalAvailable} totalDebt={totalDebt}
-              insights={insights} topNegotiable={topNegotiable} onGoTab={setTab} />
+              insights={insights} topNegotiable={topNegotiable} onGoTab={setTab}
+              showProNudge={entitlements ? !entitlements.paid : false} />
           )}
           {tab === "accounts" && <AccountsTab onChanged={loadOverview} />}
           {tab === "transactions" && <TransactionsTab />}
@@ -1498,7 +1770,7 @@ function Home({ initialAuthMode = "login" }) {
           {tab === "budgets" && <BudgetsTab />}
           {tab === "goals" && <GoalsTab />}
           {tab === "insights" && <InsightsTab onGoTab={setTab} />}
-          {tab === "deals" && <DealsTab enabled={!!cfg.dealtoughEnabled} />}
+          {tab === "deals" && <DealsTab enabled={!!cfg.dealtoughEnabled} onGoTab={setTab} />}
           {tab === "billing" && <BillingTab enabled={!!cfg.stripeEnabled} />}
           {tab === "doerbot" && isDoerBotOwner && <DoerBotTab />}
           {tab === "shared" && (
@@ -1571,5 +1843,11 @@ export default function App() {
   if (path === "/terms") return <TermsPage />;
   if (path === "/privacy") return <PrivacyPage />;
   const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
-  return <>{<Home initialAuthMode={isSignup ? "register" : "login"} />}<IosInstallBanner /></>;
+  const isLogin = path === "/login";
+  return (
+    <>
+      <Home initialAuthMode={isSignup ? "register" : "login"} startOnAuth={isSignup || isLogin} />
+      <IosInstallBanner />
+    </>
+  );
 }

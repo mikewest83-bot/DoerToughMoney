@@ -57,9 +57,17 @@ async function req(
   const data = await res.json().catch(() => ({}));
 
   if (!res.ok) {
-    throw new Error(
-      data.error || `Request failed (${res.status})`
+    // Carry the status and the server's machine-readable code alongside the
+    // human message. Callers that only read .message behave exactly as
+    // before; the ones that need to tell "you must upgrade" apart from a
+    // real failure can check .code === "upgrade_required" instead of
+    // pattern-matching prose.
+    const err = new Error(
+      data.message || data.error || `Request failed (${res.status})`
     );
+    err.status = res.status;
+    err.code = data.error;
+    throw err;
   }
 
   return data;
