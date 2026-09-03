@@ -8,7 +8,7 @@ import { MessageCircle, X } from "lucide-react";
 // (https://doertoughmikeai.com) so there is exactly one Mike AI running
 // anywhere — this widget is just a window onto it. Nothing here talks to
 // DoerToughMoney's API, database, or auth.
-const MIKE_AI_URL = "https://doertoughmikeai.com";
+const MIKE_AI_URL = "https://doertoughmikeai.com?brain=luna";
 
 export default function MikeWidget() {
   const [open, setOpen] = useState(false);
