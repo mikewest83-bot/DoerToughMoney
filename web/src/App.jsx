@@ -460,7 +460,7 @@ function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable,
 }
 
 // ── Accounts (Plaid) ─────────────────────────────────────
-function AccountsTab({ onChanged }) {
+function AccountsTab({ onChanged, userId }) {
   const [items, setItems] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -492,7 +492,10 @@ function AccountsTab({ onChanged }) {
 
   const syncAll = async () => {
     setSyncing(true);
-    try { await api.plaidSync(); await load(); onChanged?.(); }
+    // Stamping the same clock the on-open auto-sync reads means a manual
+    // sync counts as the most recent one, so reopening the app right after
+    // pressing this doesn't immediately sync again.
+    try { await api.plaidSync(); markPlaidSynced(userId); await load(); onChanged?.(); }
     catch (e) { setErr(e.message); } finally { setSyncing(false); }
   };
 
@@ -1446,6 +1449,26 @@ function BillingTab({ enabled }) {
   );
 }
 
+// ── Plaid auto-sync on app open ──────────────────────────
+// Plaid pushes transaction updates by webhook, but balances (and anything
+// that landed while the app was closed) only refresh when a sync actually
+// runs. Opening the app is the moment that matters, so it fires the same
+// /api/plaid/sync the manual button does — throttled, so reopening the app
+// or bouncing between tabs can't hammer Plaid's API.
+const PLAID_SYNC_COOLDOWN_MS = 15 * 60 * 1000;
+const plaidSyncStampKey = (userId) => `dtm_last_plaid_sync:${userId}`;
+
+// Both wrapped: localStorage throws outright in some private-browsing modes,
+// and a background refresh must never be what takes the app down.
+function lastPlaidSyncAt(userId) {
+  try { return Number(localStorage.getItem(plaidSyncStampKey(userId))) || 0; }
+  catch { return 0; }
+}
+function markPlaidSynced(userId) {
+  try { localStorage.setItem(plaidSyncStampKey(userId), String(Date.now())); }
+  catch { /* no storage — worst case is syncing again on the next open */ }
+}
+
 // ── Main authenticated shell ─────────────────────────────
 function Home({ initialAuthMode = "login" }) {
   const [user, setUser] = useState(null);
@@ -1533,6 +1556,27 @@ function Home({ initialAuthMode = "login" }) {
     })();
   }, [refresh]);
 
+  // One sync per app open, at most once every PLAID_SYNC_COOLDOWN_MS. The ref
+  // guard is what makes it once-per-open: this effect re-runs whenever `user`
+  // is replaced (any refresh()), and without it a long session would sync on
+  // every one of those. Deliberately silent — nobody asked for this refresh,
+  // so a failure leaves the last-known numbers on screen instead of throwing
+  // an error banner. The manual Sync button on Accounts is unchanged and
+  // still syncs unconditionally.
+  const autoSyncedRef = useRef(false);
+  useEffect(() => {
+    if (!ready || !user || !cfg.plaidEnabled || autoSyncedRef.current) return;
+    if (Date.now() - lastPlaidSyncAt(user.id) < PLAID_SYNC_COOLDOWN_MS) return;
+    autoSyncedRef.current = true;
+    (async () => {
+      try {
+        await api.plaidSync();
+        markPlaidSynced(user.id);
+        await loadOverview();
+      } catch { /* keep whatever's already on screen */ }
+    })();
+  }, [ready, user, cfg.plaidEnabled, loadOverview]);
+
   const signOut = () => { setToken(null); setUser(null); };
 
   if (!ready) return <div style={{ minHeight: "100vh", background: pageBg }}>{fontStyle}</div>;
@@ -1597,7 +1641,7 @@ function Home({ initialAuthMode = "login" }) {
               insights={insights} topNegotiable={topNegotiable} onGoTab={setTab}
               showProNudge={entitlements ? !entitlements.paid : false} />
           )}
-          {tab === "accounts" && <AccountsTab onChanged={loadOverview} />}
+          {tab === "accounts" && <AccountsTab onChanged={loadOverview} userId={user.id} />}
           {tab === "transactions" && <TransactionsTab />}
           {tab === "bills" && <BillsTab onGoTab={setTab} />}
           {tab === "budgets" && <BudgetsTab />}
