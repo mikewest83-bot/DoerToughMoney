@@ -1,3 +1,8 @@
 User-agent: *
 Allow: /
 Disallow: /api/
+# Utility routes — nothing to index, and /reset carries a one-time token.
+Disallow: /login
+Disallow: /reset
+
+Sitemap: https://doertoughmoney.com/sitemap.xml

@@ -1701,6 +1701,11 @@ function Home({ initialAuthMode = "login" }) {
 // ── Legal pages ───────────────────────────────────────────
 // Placeholder copy — NOT reviewed by a lawyer.
 function LegalPage({ title, updated, sections }) {
+  // Every route is served by the same index.html, so without this /terms and
+  // /privacy would share the landing page's title verbatim — duplicate titles
+  // across indexed URLs.
+  useEffect(() => { document.title = `${title} — DoerToughMoney`; }, [title]);
+
   return (
     <div style={{ minHeight: "100vh", background: pageBg, fontFamily: "Inter, system-ui, sans-serif", color: C.ink }}>
       {fontStyle}
@@ -1758,6 +1763,7 @@ function PrivacyPage() {
 // URL, and a wrong/expired one has to be able to say so on its own.
 function ResetPasswordPage() {
   const token = new URLSearchParams(window.location.search).get("token") || "";
+  useEffect(() => { document.title = "Set a new password — DoerToughMoney"; }, []);
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [err, setErr] = useState("");

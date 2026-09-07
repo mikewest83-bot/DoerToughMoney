@@ -11,6 +11,51 @@
     <meta property="og:title" content="DoerToughMoney — Keep More. Spend Smarter." />
     <meta property="og:description" content="Know what you can afford. Know what you should pay. Keep more of your money." />
     <meta property="og:type" content="website" />
+    <meta property="og:url" content="https://doertoughmoney.com/" />
+    <meta property="og:site_name" content="DoerToughMoney" />
+    <meta property="og:image" content="https://doertoughmoney.com/og-image.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="DoerToughMoney — Know what you can safely spend." />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="DoerToughMoney — Keep More. Spend Smarter." />
+    <meta name="twitter:description" content="Know what you can afford. Know what you should pay. Keep more of your money." />
+    <meta name="twitter:image" content="https://doertoughmoney.com/og-image.png" />
+
+    <!-- The app is reachable at both doertoughmoney.com and its Railway host,
+         and every client route is served by the same index.html. Without a
+         canonical those register as duplicates of one another. -->
+    <link rel="canonical" href="https://doertoughmoney.com/" />
+    <script>
+      // Point the canonical at this page's own path on the primary domain.
+      // Static value above is correct for "/" so a crawler that runs no
+      // JavaScript still gets a sane answer on the page that matters most.
+      (function () {
+        var link = document.querySelector('link[rel="canonical"]');
+        if (!link) return;
+        var path = location.pathname.replace(/\/{2,}/g, "/").replace(/\/$/, "");
+        link.href = "https://doertoughmoney.com" + (path || "/");
+      })();
+    </script>
+
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebApplication",
+        "name": "DoerToughMoney",
+        "url": "https://doertoughmoney.com/",
+        "applicationCategory": "FinanceApplication",
+        "operatingSystem": "Web",
+        "description": "DoerToughMoney brings your accounts, bills, budgets, goals and spending into one clear picture \u2014 then helps you decide what to do next.",
+        "image": "https://doertoughmoney.com/og-image.png",
+        "publisher": { "@type": "Organization", "name": "Doer Tough", "url": "https://doertoughmoney.com/" },
+        "offers": [
+          { "@type": "Offer", "name": "Free", "price": "0", "priceCurrency": "USD" },
+          { "@type": "Offer", "name": "DoerToughMoney Pro", "price": "9.99", "priceCurrency": "USD",
+            "description": "Insights, bills worth renegotiating, and what's safe to spend. Billed monthly." }
+        ]
+      }
+    </script>
     <link rel="icon" href="/favicon.ico" sizes="any">
     <link rel="icon" href="/favicon-32.png" type="image/png" sizes="32x32">
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
@@ -68,6 +113,19 @@
   </head>
   <body style="margin:0">
     <div id="root"></div>
+    <noscript>
+      <div style="max-width:720px;margin:0 auto;padding:48px 20px;font:400 16px/1.6 Inter,system-ui,sans-serif;color:#16151A">
+        <h1 style="font-size:34px;line-height:1.1;letter-spacing:-.03em">Know what you can safely spend.</h1>
+        <p>DoerToughMoney brings your accounts, bills, budgets, goals and spending into one clear picture &mdash; then helps you decide what to do next.</p>
+        <ul>
+          <li>Connect your banks securely and see every balance in one place.</li>
+          <li>Track bills and budgets, and see what&rsquo;s safe to spend before your next bills land.</li>
+          <li>Check whether a purchase is a good deal before you pay for it.</li>
+        </ul>
+        <p>DoerToughMoney needs JavaScript to run. Please enable it, or open the app in a modern browser.</p>
+        <p><a href="/terms">Terms</a> &middot; <a href="/privacy">Privacy Policy</a></p>
+      </div>
+    </noscript>
     <script type="module" src="/src/main.jsx"></script>
   </body>
 </html>
