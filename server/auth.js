@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import {
@@ -9,6 +10,8 @@ import {
   linkGoogleId,
 } from "./db.js";
 import { verifyGoogleToken } from "./google.js";
+import prisma from "./db.js";
+import { sendPasswordResetEmail, mailConfigured } from "./mailer.js";
 
 const JWT_SECRET =
   process.env.JWT_SECRET ||
@@ -271,6 +274,119 @@ export async function login(req, res) {
     token: sign(user),
     user: publicUser(user),
   });
+}
+
+// ── password reset ───────────────────────────────────────
+// Two rules shape this whole flow:
+//   1. /forgot answers the same way no matter what — an attacker must not be
+//      able to learn from it whether an email has an account here.
+//   2. Only the SHA-256 of the token reaches the database, so a leaked table
+//      dump cannot be replayed into an account takeover.
+
+const RESET_TTL_MINUTES = 60;
+const MIN_PASSWORD_LENGTH = 8;
+
+const hashResetToken = (token) =>
+  crypto.createHash("sha256").update(token).digest("hex");
+
+export async function requestPasswordReset(req, res) {
+  const { email } = req.body || {};
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+
+  // The neutral answer, returned on every path below.
+  const accepted = () =>
+    res.json({
+      ok: true,
+      message: "If that email has an account, a reset link is on its way.",
+    });
+
+  if (!normalizedEmail || normalizedEmail.length > 254) return accepted();
+
+  const user = await getUserByEmail(normalizedEmail);
+
+  // No account, or a Google-only one: nothing to reset, and saying so would
+  // leak which emails are registered. A Google account still signs in.
+  if (!user || !user.passwordHash) return accepted();
+
+  if (!mailConfigured()) {
+    console.error("[auth] password reset requested but no mail provider is configured.");
+    return accepted();
+  }
+
+  // Any earlier outstanding link for this account stops working the moment a
+  // newer one is issued, so a forwarded old email is not a second key.
+  await prisma.passwordResetToken.updateMany({
+    where: { userId: user.id, usedAt: null },
+    data: { usedAt: new Date() },
+  });
+
+  const token = crypto.randomBytes(32).toString("base64url");
+
+  await prisma.passwordResetToken.create({
+    data: {
+      userId: user.id,
+      tokenHash: hashResetToken(token),
+      expiresAt: new Date(Date.now() + RESET_TTL_MINUTES * 60_000),
+    },
+  });
+
+  await sendPasswordResetEmail({
+    to: user.email,
+    name: user.name,
+    token,
+    ttlMinutes: RESET_TTL_MINUTES,
+  });
+
+  return accepted();
+}
+
+export async function resetPassword(req, res) {
+  const { token, password } = req.body || {};
+
+  if (!token || !password) {
+    return res.status(400).json({ error: "That reset link is incomplete." });
+  }
+
+  if (String(password).length < MIN_PASSWORD_LENGTH) {
+    return res.status(400).json({
+      error: `Use a password of at least ${MIN_PASSWORD_LENGTH} characters.`,
+    });
+  }
+
+  const record = await prisma.passwordResetToken.findUnique({
+    where: { tokenHash: hashResetToken(String(token)) },
+  });
+
+  // One message for every failure shape — expired, already used, never
+  // existed — so probing tells an attacker nothing.
+  const invalid = () =>
+    res.status(400).json({
+      error: "That reset link has expired or already been used. Request a new one.",
+    });
+
+  if (!record || record.usedAt || record.expiresAt.getTime() < Date.now()) {
+    return invalid();
+  }
+
+  const user = await getUserById(record.userId);
+  if (!user) return invalid();
+
+  const passwordHash = await bcrypt.hash(String(password), 12);
+
+  // Stamping the token and setting the password in one transaction means a
+  // failure part-way cannot leave a spent link that still works.
+  await prisma.$transaction([
+    prisma.user.update({
+      where: { id: user.id },
+      data: { passwordHash },
+    }),
+    prisma.passwordResetToken.updateMany({
+      where: { userId: user.id, usedAt: null },
+      data: { usedAt: new Date() },
+    }),
+  ]);
+
+  return res.json({ ok: true });
 }
 
 export async function authRequired(req, res, next) {

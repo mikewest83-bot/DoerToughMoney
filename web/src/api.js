@@ -90,6 +90,20 @@ export const api = {
       body: b,
     }),
 
+  // Always resolves with the same neutral message whether or not the email
+  // has an account — the server refuses to confirm either way.
+  forgotPassword: (b) =>
+    req("/api/password/forgot", {
+      method: "POST",
+      body: b,
+    }),
+
+  resetPassword: (b) =>
+    req("/api/password/reset", {
+      method: "POST",
+      body: b,
+    }),
+
   googleAuth: (idToken) =>
     req("/api/auth/google", {
       method: "POST",

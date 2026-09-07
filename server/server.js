@@ -7,8 +7,9 @@ import "express-async-errors"; // route async throws reach the error handler bel
 import cors from "cors";
 import rateLimit from "express-rate-limit";
 
-import { register, login, googleAuth, registerWithGoogle, authRequired, publicUser } from "./auth.js";
+import { register, login, googleAuth, registerWithGoogle, authRequired, publicUser, requestPasswordReset, resetPassword } from "./auth.js";
 import { googleConfigured } from "./google.js";
+import { mailConfigured } from "./mailer.js";
 import {
   registrationOptions as passkeyRegOptions, registrationVerify as passkeyRegVerify,
   authenticationOptions as passkeyAuthOptions, authenticationVerify as passkeyAuthVerify,
@@ -101,6 +102,9 @@ app.get("/api/config", (_req, res) => {
     plaidEnabled: plaidConfigured(),
     dealtoughEnabled: dealtoughConfigured(),
     stripeEnabled: stripeConfigured(),
+    // Drives whether the sign-in screen offers "Forgot password?" — without a
+    // mail provider the link could only ever dead-end.
+    passwordResetEnabled: mailConfigured(),
   });
 });
 
@@ -109,6 +113,11 @@ app.post("/api/register", authLimiter, register);
 app.post("/api/login", authLimiter, login);
 app.post("/api/auth/google", authLimiter, googleAuth);
 app.post("/api/register/google", authLimiter, registerWithGoogle);
+
+// Password reset. Both sit behind authLimiter (12/min) — /forgot because it
+// sends mail, /reset because it is guessing at a token.
+app.post("/api/password/forgot", authLimiter, requestPasswordReset);
+app.post("/api/password/reset", authLimiter, resetPassword);
 
 // ── passkeys (Face ID / Touch ID) ────────────────────────
 // Enrollment requires being signed in already; sign-in is public and

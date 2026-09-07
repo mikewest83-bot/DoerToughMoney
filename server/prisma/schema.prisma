@@ -75,6 +75,7 @@ model User {
   groupMemberships GroupMember[]
   createdGroups    Group[]
   credentials      Credential[]
+  passwordResets   PasswordResetToken[]
 
   plaidItems   PlaidItem[]
   accounts     Account[]
@@ -101,6 +102,25 @@ model Credential {
 
   @@index([userId])
 }
+
+// A single-use grant to set a new password after "I forgot mine".
+//
+// Only the SHA-256 of the token is stored, so a database read never yields
+// anything that can reset an account — the usable half exists only in the
+// email that was sent. Rows are consumed by stamping usedAt rather than being
+// deleted, so a replayed link fails closed instead of silently 404-ing.
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
 
 // ── DoerToughMoney: linked banks, balances, transactions ────
 // One PlaidItem per bank login (Plaid's unit of a linked institution); each

@@ -108,6 +108,12 @@ function Auth({ onDone, initialMode = "login" }) {
   // Which action is in flight, so the three sign-in paths (password, Google,
   // passkey) don't show each other's spinners.
   const [busy, setBusy] = useState(null); // null | "password" | "google" | "passkey"
+  // Neutral confirmation after asking for a reset link. Separate from `err`
+  // because it is not a failure — it says the same thing either way.
+  const [notice, setNotice] = useState("");
+  // Only offer "Forgot password?" when the server actually has a mail
+  // provider; without one the link could only ever dead-end.
+  const [resetEnabled, setResetEnabled] = useState(false);
   const set = (k) => (e) => setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async () => {
@@ -121,6 +127,14 @@ function Auth({ onDone, initialMode = "login" }) {
     } catch (e) { setErr(e.message); } finally { setBusy(null); }
   };
 
+  const submitForgot = async () => {
+    setErr(""); setNotice(""); setBusy("forgot");
+    try {
+      const res = await api.forgotPassword({ email: form.email });
+      setNotice(res.message || "If that email has an account, a reset link is on its way.");
+    } catch (e) { setErr(e.message); } finally { setBusy(null); }
+  };
+
   // ── Sign in with Google ──────────────────────────────────
   // Additive: existing password accounts are untouched. A brand-new Google
   // user only needs a handle to finish — Google already proved who they are.
@@ -129,7 +143,10 @@ function Auth({ onDone, initialMode = "login" }) {
   const googleBtnRef = useRef(null);
 
   useEffect(() => {
-    api.config().then((c) => setGoogleCfg({ enabled: !!c.googleEnabled, clientId: c.googleClientId })).catch(() => {});
+    api.config().then((c) => {
+      setGoogleCfg({ enabled: !!c.googleEnabled, clientId: c.googleClientId });
+      setResetEnabled(!!c.passwordResetEnabled);
+    }).catch(() => {});
   }, []);
 
   const handleGoogleCredential = useCallback(async (response) => {
@@ -246,6 +263,20 @@ function Auth({ onDone, initialMode = "login" }) {
               Cancel
             </button>
           </div>
+        ) : mode === "forgot" ? (
+          <div style={{ marginTop: 26 }}>
+            <p style={{ fontSize: 14, color: C.muted, lineHeight: 1.5, marginTop: 0 }}>
+              Enter the email on your account and we&rsquo;ll send you a link to set a new password.
+            </p>
+            <div style={{ marginTop: 12 }}>{field("Email", "email", "email", { autoComplete: "email" })}</div>
+            {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
+            {notice && <p style={{ color: C.brand, fontSize: 13, marginTop: 10 }}>{notice}</p>}
+            <button onClick={submitForgot} disabled={!!busy}
+              style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
+                background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
+              {busy === "forgot" ? "\u2026" : "Send reset link"}
+            </button>
+          </div>
         ) : (
           <div style={{ marginTop: 26 }}>
             {/* Faster paths back in. Passkeys are sign-in only — enrolling one
@@ -282,13 +313,19 @@ function Auth({ onDone, initialMode = "login" }) {
                 background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
               {busy === "password" ? "…" : mode === "login" ? "Sign in" : "Create account"}
             </button>
+            {mode === "login" && resetEnabled && (
+              <button onClick={() => { setErr(""); setNotice(""); setMode("forgot"); }}
+                style={{ marginTop: 12, width: "100%", background: "none", border: "none", color: C.muted, fontSize: 13.5, cursor: "pointer" }}>
+                Forgot password?
+              </button>
+            )}
           </div>
         )}
 
         {!pendingGoogle && (
-          <button onClick={() => { setErr(""); setMode(mode === "login" ? "register" : "login"); }}
+          <button onClick={() => { setErr(""); setNotice(""); setMode(mode === "login" ? "register" : "login"); }}
             style={{ marginTop: 18, background: "none", border: "none", color: C.muted, fontSize: 14 }}>
-            {mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
+            {mode === "forgot" ? "Back to sign in" : mode === "login" ? "New here? Create an account" : "Have an account? Sign in"}
           </button>
         )}
 
@@ -1715,10 +1752,91 @@ function PrivacyPage() {
   );
 }
 
+// ── /reset?token=… ───────────────────────────────────────
+// Reached only from the emailed link. Deliberately its own page rather than a
+// mode inside Auth: the visitor is not signing in, the token comes from the
+// URL, and a wrong/expired one has to be able to say so on its own.
+function ResetPasswordPage() {
+  const token = new URLSearchParams(window.location.search).get("token") || "";
+  const [password, setPassword] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState(false);
+
+  const submit = async () => {
+    setErr("");
+    if (password.length < 8) return setErr("Use a password of at least 8 characters.");
+    if (password !== confirm) return setErr("Those two passwords don't match.");
+    setBusy(true);
+    try {
+      await api.resetPassword({ token, password });
+      setDone(true);
+    } catch (e) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  const input = (value, onChange, placeholder, autoComplete) => (
+    <input type="password" value={value} placeholder={placeholder} autoComplete={autoComplete}
+      onChange={(e) => onChange(e.target.value)}
+      onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+      style={{ width: "100%", padding: 14, borderRadius: 14, border: `1px solid ${C.line}`,
+        background: C.surface, color: C.ink, fontSize: 15.5, outline: "none" }} />
+  );
+
+  return (
+    <div style={{ minHeight: "100vh", background: pageBg, fontFamily: "Inter, system-ui, sans-serif", color: C.ink,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }}>
+      {fontStyle}
+      <div style={{ width: "100%", maxWidth: 420 }}>
+        <h1 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: 28, fontWeight: 800, margin: "0 0 6px" }}>
+          {done ? "Password updated" : "Set a new password"}
+        </h1>
+
+        {done ? (
+          <>
+            <p style={{ fontSize: 14.5, color: C.muted, lineHeight: 1.55 }}>
+              You can sign in with your new password now.
+            </p>
+            <a href="/" style={{ display: "block", textAlign: "center", marginTop: 20, padding: 15, borderRadius: 14,
+              background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, textDecoration: "none" }}>
+              Go to sign in
+            </a>
+          </>
+        ) : !token ? (
+          <>
+            <p style={{ fontSize: 14.5, color: C.muted, lineHeight: 1.55 }}>
+              That link is missing its reset code. Request a new one from the sign-in screen.
+            </p>
+            <a href="/" style={{ color: C.brand, fontWeight: 700, fontSize: 14, textDecoration: "none" }}>← Back to sign in</a>
+          </>
+        ) : (
+          <>
+            <p style={{ fontSize: 14.5, color: C.muted, lineHeight: 1.55, marginTop: 0 }}>
+              Choose something you haven&rsquo;t used here before. At least 8 characters.
+            </p>
+            <div style={{ marginTop: 14 }}>{input(password, setPassword, "New password", "new-password")}</div>
+            <div style={{ marginTop: 10 }}>{input(confirm, setConfirm, "Confirm new password", "new-password")}</div>
+            {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
+            <button onClick={submit} disabled={busy}
+              style={{ width: "100%", marginTop: 16, padding: 15, borderRadius: 14, border: "none",
+                background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
+              {busy ? "\u2026" : "Save new password"}
+            </button>
+            <p style={{ marginTop: 18, textAlign: "center" }}>
+              <a href="/" style={{ color: C.muted, fontSize: 13.5, textDecoration: "none" }}>Back to sign in</a>
+            </p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const path = window.location.pathname;
   if (path === "/terms") return <TermsPage />;
   if (path === "/privacy") return <PrivacyPage />;
+  if (path === "/reset") return <ResetPasswordPage />;
   const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
   return <>{<Home initialAuthMode={isSignup ? "register" : "login"} />}<IosInstallBanner /></>;
 }
