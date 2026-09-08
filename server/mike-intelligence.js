@@ -25,9 +25,32 @@ function normalizeBills(bills = []) {
   })) : [];
 }
 
+/**
+ * insights.js follows Plaid's sign convention: a POSITIVE amount is money OUT
+ * (spending) and a NEGATIVE amount is money IN (income). That is correct for
+ * Plaid-sourced rows and wrong for figures a user SPOKE, where "I made $3,000"
+ * naturally arrives as +3000 and is then counted as spending.
+ *
+ * So a caller may state the direction in words instead, via `flow` (or its
+ * alias `direction`). When it is present the magnitude is used and the sign is
+ * derived from it, so a wrong sign cannot survive. When it is absent nothing
+ * changes: the raw signed value passes through exactly as before, which keeps
+ * the Plaid path byte-identical.
+ */
+const FLOW_OUT = new Set(["out", "spend", "spending", "debit", "expense", "payment", "purchase"]);
+const FLOW_IN = new Set(["in", "income", "credit", "deposit", "paycheck", "refund"]);
+
+function signedAmountCents(t) {
+  const raw = Number.isFinite(Number(t?.amountCents)) ? Number(t.amountCents) : cents(t?.amount);
+  const flow = String(t?.flow ?? t?.direction ?? "").trim().toLowerCase();
+  if (FLOW_OUT.has(flow)) return Math.abs(raw);
+  if (FLOW_IN.has(flow)) return -Math.abs(raw);
+  return raw;
+}
+
 function normalizeTransactions(transactions = []) {
   return Array.isArray(transactions) ? transactions.map((t) => ({
-    amountCents: Number.isFinite(Number(t?.amountCents)) ? Number(t.amountCents) : cents(t?.amount),
+    amountCents: signedAmountCents(t),
     category: t?.category || "Uncategorized",
   })) : [];
 }
