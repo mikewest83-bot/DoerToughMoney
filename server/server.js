@@ -40,6 +40,7 @@ import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
 import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
 import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
 import { doerbotConfigured, getDoerBotSummary } from "./doerbot.js";
+import { installMikeOwnerRoutes } from "./mike-owner.js";
 import { proRequired, hasPaidAccess, canLinkAnotherBank, upgradeRequired, freeBankLimit, paywallEnabled } from "./entitlements.js";
 
 validateProductionConfig();
@@ -218,6 +219,18 @@ app.post("/api/plaid/sync", authRequired, plaidLimiter, async (req, res) => {
   const results = await syncAllForUser(prisma, req.user.id);
   res.json({ results });
 });
+
+// ── Mike AI owner-only read access ───────────────────────
+// Registers GET /api/v1/mike/owner/snapshot. Deliberately mounted here at the
+// top level, alongside every other route — a route registered inside another
+// handler's body is still valid JavaScript and passes both `node --check` and
+// any build verifier, but never actually registers, so it silently falls
+// through to the SPA catch-all at the bottom of this file.
+//
+// The route authenticates with its own service token and resolves the account
+// from MIKE_OWNER_EMAIL server-side, so no caller can select a different
+// user's data. See mike-owner.js for the full reasoning.
+installMikeOwnerRoutes(app, prisma);
 
 // ── accounts & balances ───────────────────────────────────
 app.get("/api/accounts", authRequired, async (req, res) => {
