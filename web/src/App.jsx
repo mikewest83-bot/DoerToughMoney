@@ -235,6 +235,11 @@ function Auth({ onDone, initialMode = "login" }) {
           DoerTough<span style={{ color: C.brand }}>Money</span>
         </div>
         <p style={{ color: C.muted, fontSize: 15, marginTop: 4 }}>Your money. Your decisions. Your advantage.</p>
+        {mode === "register" && (
+          <p style={{ color: C.muted, fontSize: 14, marginTop: 10, lineHeight: 1.45 }}>
+            Free to start. Then connect a bank — about a minute.
+          </p>
+        )}
 
         {pendingGoogle ? (
           // A brand-new Google account: name/email are already proven by
@@ -497,7 +502,7 @@ function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable,
 }
 
 // ── Accounts (Plaid) ─────────────────────────────────────
-function AccountsTab({ onChanged, userId }) {
+function AccountsTab({ onChanged, userId, autoConnect = false }) {
   const [items, setItems] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -521,6 +526,14 @@ function AccountsTab({ onChanged, userId }) {
     try { setLinkToken((await api.plaidLinkToken()).linkToken); }
     catch (e) { setErr(e.message); setConnecting(false); }
   };
+
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (!autoConnect || autoStarted.current || loading || connecting || linkToken) return;
+    if (items.length > 0) return;
+    autoStarted.current = true;
+    connect();
+  }, [autoConnect, loading, connecting, linkToken, items.length]);
 
   const removeItem = async (id) => {
     try { await api.plaidRemoveItem(id); await load(); onChanged?.(); }
@@ -1517,6 +1530,7 @@ function Home({ initialAuthMode = "login" }) {
   const [cfg, setCfg] = useState({ plaidEnabled: false, dealtoughEnabled: false, stripeEnabled: false });
   const [tab, setTab] = useState("home");
   const [openGroupId, setOpenGroupId] = useState(null);
+  const [wantConnect, setWantConnect] = useState(false);
 
   const [accounts, setAccounts] = useState([]);
   const [totalAvailable, setTotalAvailable] = useState(0);
@@ -1675,10 +1689,14 @@ function Home({ initialAuthMode = "login" }) {
         <section style={{ padding: "20px 28px 56px" }}>
           {tab === "home" && (
             <HomeTab accounts={accounts} totalAvailable={totalAvailable} totalDebt={totalDebt}
-              insights={insights} topNegotiable={topNegotiable} onGoTab={setTab}
+              insights={insights} topNegotiable={topNegotiable}
+              onGoTab={(k) => {
+                if (k === "accounts" && accounts.length === 0) setWantConnect(true);
+                setTab(k);
+              }}
               showProNudge={entitlements ? !entitlements.paid : false} />
           )}
-          {tab === "accounts" && <AccountsTab onChanged={loadOverview} userId={user.id} />}
+          {tab === "accounts" && <AccountsTab onChanged={loadOverview} userId={user.id} autoConnect={wantConnect} />}
           {tab === "transactions" && <TransactionsTab />}
           {tab === "bills" && <BillsTab onGoTab={setTab} />}
           {tab === "budgets" && <BudgetsTab />}

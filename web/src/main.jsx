@@ -27,7 +27,7 @@ function LaunchLanding({ onContinue }) {
             <button className="dt-primary" onClick={() => onContinue("/signup")}>Get started — it’s free <span>→</span></button>
             <button className="dt-secondary" onClick={() => onContinue("/login")}>I already have an account</button>
           </div>
-          <div className="dt-trust"><span>✓</span> Secure bank connections <span>✓</span> Private by design <span>✓</span> No credit card required</div>
+          <div className="dt-trust"><span>✓</span> Connect a bank in about a minute <span>✓</span> Private by design <span>✓</span> No credit card required</div>
         </div>
 
         <div className="dt-hero-preview" aria-label="DoerToughMoney financial dashboard preview">
@@ -79,7 +79,7 @@ function LaunchLanding({ onContinue }) {
               <li>Bills, and which are worth renegotiating</li>
               <li>Affordability — what&rsquo;s safe to spend before your next bills</li>
             </ul>
-            <button className="dt-primary dt-plan-cta" onClick={() => onContinue("/signup")}>Get started <span>&rarr;</span></button>
+            <button className="dt-primary dt-plan-cta" onClick={() => onContinue("/signup")}>Start Pro — $9.99/mo</button>
             <p className="dt-plan-note">Cancel anytime.</p>
           </div>
         </div>
