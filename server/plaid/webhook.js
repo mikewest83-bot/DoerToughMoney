@@ -87,6 +87,7 @@ export function classifyPlaidWebhook(body = {}) {
       actions.syncTransactions = true;
     } else if (
       code === "PENDING_EXPIRATION"
+      || code === "PENDING_DISCONNECT"
       || code === "ITEM_LOGIN_REQUIRED"
       || errorCode === "ITEM_LOGIN_REQUIRED"
     ) {

@@ -53,6 +53,23 @@ describe("classifyPlaidWebhook", () => {
     expect(a.syncRecurring).toBe(true);
   });
 
+  it("marks reauth on US/CA PENDING_DISCONNECT", () => {
+    const a = classifyPlaidWebhook({
+      webhook_type: "ITEM",
+      webhook_code: "PENDING_DISCONNECT",
+    });
+    expect(a.itemStatus).toBe("REAUTH_REQUIRED");
+    expect(a.syncTransactions).toBe(false);
+  });
+
+  it("marks reauth on UK/EU PENDING_EXPIRATION", () => {
+    const a = classifyPlaidWebhook({
+      webhook_type: "ITEM",
+      webhook_code: "PENDING_EXPIRATION",
+    });
+    expect(a.itemStatus).toBe("REAUTH_REQUIRED");
+  });
+
   it("marks reauth when login is required", () => {
     const a = classifyPlaidWebhook({
       webhook_type: "ITEM",
