@@ -1,14 +1,12 @@
 // plaid/webhook.js
-// Express handler for Plaid webhooks (item + transaction updates). Plaid signs
-// webhooks with a JWT in the Plaid-Verification header rather than a raw HMAC
-// like Dwolla did — verification requires an extra round trip to fetch the
-// signing key the JWT names, cached by key id since Plaid rotates keys rarely.
+// Express handler for Plaid webhooks (item, transactions, recurring).
+// Plaid signs webhooks with a JWT in the Plaid-Verification header.
 //
-// Mount with the normal JSON body parser (unlike Dwolla's webhook, Plaid's
-// signature covers the parsed body's SHA-256, not the raw bytes):
-//   app.post("/webhooks/plaid", express.json(), plaidWebhook(prisma));
+// Mount with the JSON body parser so we can hash the raw buffer Plaid signed:
+//   app.post("/webhooks/plaid", express.json({ verify }), plaidWebhook(prisma));
 import { plaid } from "./client.js";
-import { syncItem } from "./sync.js";
+import { syncItem, syncAccounts } from "./sync.js";
+import { syncRecurring } from "./recurring.js";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 
@@ -45,29 +43,110 @@ async function verifyPlaidWebhook(req) {
   return payload.request_body_sha256 === expectedHash;
 }
 
+const TXN_SYNC_CODES = new Set([
+  "INITIAL_UPDATE",
+  "HISTORICAL_UPDATE",
+  "DEFAULT_UPDATE",
+  "TRANSACTIONS_REMOVED",
+  "SYNC_UPDATES_AVAILABLE",
+]);
+
+/**
+ * Decide what a verified Plaid webhook should do. Pure — unit-tested.
+ * Unknown types ack as no-ops so Plaid does not retry forever.
+ */
+export function classifyPlaidWebhook(body = {}) {
+  const type = body.webhook_type;
+  const code = body.webhook_code;
+  const errorCode = body.error?.error_code;
+  const actions = {
+    syncTransactions: false,
+    syncRecurring: false,
+    syncAccounts: false,
+    itemStatus: null,
+  };
+
+  if (type === "TRANSACTIONS") {
+    if (code === "RECURRING_TRANSACTIONS_UPDATE") {
+      actions.syncRecurring = true;
+    } else if (TXN_SYNC_CODES.has(code)) {
+      actions.syncTransactions = true;
+      if (code === "HISTORICAL_UPDATE" || body.historical_update_complete === true) {
+        actions.syncRecurring = true;
+      }
+    }
+  }
+
+  if (type === "RECURRING_TRANSACTIONS") {
+    actions.syncRecurring = true;
+  }
+
+  if (type === "ITEM") {
+    if (code === "LOGIN_REPAIRED") {
+      actions.itemStatus = "ACTIVE";
+      actions.syncTransactions = true;
+    } else if (
+      code === "PENDING_EXPIRATION"
+      || code === "ITEM_LOGIN_REQUIRED"
+      || errorCode === "ITEM_LOGIN_REQUIRED"
+    ) {
+      actions.itemStatus = "REAUTH_REQUIRED";
+    } else if (code === "USER_PERMISSION_REVOKED") {
+      actions.itemStatus = "ERROR";
+    } else if (code === "ERROR") {
+      actions.itemStatus = errorCode === "ITEM_LOGIN_REQUIRED" ? "REAUTH_REQUIRED" : "ERROR";
+    } else if (code === "NEW_ACCOUNTS_AVAILABLE") {
+      actions.syncAccounts = true;
+    }
+  }
+
+  return actions;
+}
+
+export async function handlePlaidWebhook(prisma, body) {
+  const plaidItemId = body?.item_id;
+  const item = plaidItemId
+    ? await prisma.plaidItem.findUnique({ where: { plaidItemId } })
+    : null;
+
+  const actions = classifyPlaidWebhook(body);
+  if (!item) return actions;
+
+  if (actions.itemStatus) {
+    await prisma.plaidItem.update({
+      where: { id: item.id },
+      data: { status: actions.itemStatus },
+    });
+  }
+
+  if (actions.syncAccounts) {
+    await syncAccounts(prisma, item);
+  }
+
+  if (actions.syncTransactions) {
+    await syncItem(prisma, item);
+  }
+
+  if (actions.syncRecurring) {
+    try {
+      await syncRecurring(prisma, item);
+    } catch (err) {
+      // Recurring is an add-on. A missing product must not 500 the webhook
+      // (Plaid would retry for hours). Transaction sync already succeeded.
+      console.warn("[plaid] recurring sync failed:", err?.response?.data || err.message);
+    }
+  }
+
+  return actions;
+}
+
 export function plaidWebhook(prisma) {
   return async (req, res) => {
     const ok = await verifyPlaidWebhook(req).catch(() => false);
     if (!ok) return res.status(403).send("bad signature");
 
-    const { webhook_type: type, webhook_code: code, item_id: plaidItemId } = req.body || {};
-
     try {
-      const item = plaidItemId ? await prisma.plaidItem.findUnique({ where: { plaidItemId } }) : null;
-
-      if (type === "TRANSACTIONS" && item) {
-        // DEFAULT_UPDATE / INITIAL_UPDATE / HISTORICAL_UPDATE / SYNC_UPDATES_AVAILABLE
-        // all mean the same thing here: something changed, go pull it.
-        await syncItem(prisma, item);
-      }
-
-      if (type === "ITEM" && item) {
-        if (code === "ERROR" || code === "PENDING_EXPIRATION" || code === "LOGIN_REPAIRED") {
-          const status = code === "LOGIN_REPAIRED" ? "ACTIVE" : "REAUTH_REQUIRED";
-          await prisma.plaidItem.update({ where: { id: item.id }, data: { status } });
-        }
-      }
-
+      await handlePlaidWebhook(prisma, req.body || {});
       return res.status(200).send("ok");
     } catch (err) {
       console.error("[plaid] webhook handler error:", err);

@@ -36,6 +36,8 @@ export async function createLinkToken(userId, webhookUrl) {
     products: [Products.Transactions],
     country_codes: [CountryCode.Us],
     language: "en",
+    // Recurring detection is weak below ~180 days of history.
+    transactions: { days_requested: 180 },
   };
 
   // Only include the webhook when one is actually configured.

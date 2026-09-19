@@ -195,6 +195,9 @@ model Bill {
   // repeated transactions, rather than entered by hand.
   autoDetected Boolean     @default(false)
   active       Boolean     @default(true)
+  // Plaid Recurring stream_id when this bill was auto-detected from
+  // /transactions/recurring/get. Null for bills the user entered by hand.
+  plaidStreamId String?    @unique
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
