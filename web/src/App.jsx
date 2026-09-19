@@ -396,17 +396,17 @@ function SimpleSheet({ title, onClose, children }) {
   );
 }
 
-const TABS = [
+const CORE_TABS = [
   { k: "home", l: "Home", Icon: WalletIcon },
-  { k: "accounts", l: "Accounts", Icon: Landmark },
-  { k: "transactions", l: "Transactions", Icon: Receipt },
   { k: "bills", l: "Bills", Icon: FileText },
+  { k: "accounts", l: "Bank", Icon: Landmark },
+  { k: "billing", l: "Pro", Icon: CreditCard },
+];
+const PRO_TABS = [
+  { k: "insights", l: "Insights", Icon: TrendingUp },
   { k: "budgets", l: "Budgets", Icon: PieChart },
   { k: "goals", l: "Goals", Icon: Target },
-  { k: "insights", l: "Insights", Icon: TrendingUp },
-  { k: "deals", l: "DealTough", Icon: Tag },
   { k: "shared", l: "Shared", Icon: Users },
-  { k: "billing", l: "Billing", Icon: CreditCard },
 ];
 
 // ── Home ─────────────────────────────────────────────────
@@ -419,11 +419,15 @@ function HomeTab({ accounts, totalAvailable, totalDebt, insights, topNegotiable,
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ ...card, background: "linear-gradient(135deg, #16151A 0%, #25232A 100%)", color: "#fff", border: "none", borderRadius: 24, padding: "24px 26px" }}>
-        <span style={{ color: "#12A150", fontSize: 13, fontWeight: 500 }}>Available to spend</span>
+        <span style={{ color: "#12A150", fontSize: 13, fontWeight: 500 }}>Safe to spend</span>
         <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 34, fontWeight: 700, marginTop: 6 }}>${money(totalAvailable)}</div>
         {totalDebt > 0 && <p style={{ margin: "6px 0 0", fontSize: 13, color: "#D8D8E2" }}>${money(totalDebt)} owed on credit accounts</p>}
+        <p style={{ margin: "8px 0 0", fontSize: 13, color: "#D8D8E2" }}>After what’s in the bank — connect a bank, add bills, then check a purchase before you pay.</p>
         <button onClick={() => onGoTab("accounts")} style={{ ...pill, marginTop: 14 }}>
           <Landmark size={14} /> {accounts.length === 0 ? "Connect a bank" : `${accounts.length} account${accounts.length === 1 ? "" : "s"} linked`}
+        </button>
+        <button onClick={() => onGoTab("deals")} style={{ ...pill, marginTop: 10, background: "transparent", border: "1.5px solid rgba(255,255,255,.28)", color: "#fff" }}>
+          <Tag size={14} /> Check a purchase
         </button>
       </div>
 
@@ -761,14 +765,14 @@ function BillsTab({ onGoTab }) {
         <div style={card}>
           <p style={sectionLabel}>Biggest opportunities</p>
           <p style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 10px" }}>
-            DealTough bill negotiation is coming soon. In the meantime, try DealTough on a one-time purchase in the Deals tab.
+            DealTough bill negotiation is coming soon. Check a one-time purchase from Home if you’re about to buy something used.
           </p>
           {topNegotiable.map((b) => (
             <div key={b.id} style={{ display: "flex", justifyContent: "space-between", padding: "5px 0", fontSize: 13.5 }}>
               <span>{b.name}</span><span style={{ fontWeight: 600 }}>${money(b.amount)}</span>
             </div>
           ))}
-          <button onClick={() => onGoTab("deals")} style={{ ...lightPill, marginTop: 8 }}>Open DealTough <ChevronRight size={14} /></button>
+          <button onClick={() => onGoTab("deals")} style={{ ...lightPill, marginTop: 8 }}>Check a purchase <ChevronRight size={14} /></button>
         </div>
       )}
 
@@ -1133,9 +1137,9 @@ function DealsTab({ enabled, onGoTab }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={card}>
-        <p style={sectionLabel}>Can I get this cheaper?</p>
+        <p style={sectionLabel}>Check this purchase</p>
         <p style={{ fontSize: 12.5, color: C.muted, margin: "6px 0 12px" }}>
-          Checks a one-time purchase against DealTough's market comparables. Bill negotiation isn't available yet — see the Bills tab.
+          Paste what they’re asking. We’ll score the deal and, on Pro, whether it’s safe against your real cash and upcoming bills.
         </p>
         <select value={form.category} onChange={(e) => setForm((f) => ({ ...f, category: e.target.value }))} style={{ ...sheetInput, marginTop: 0, appearance: "auto" }}>
           {DEAL_CATEGORIES.map((c) => <option key={c} value={c}>{c.replace("_", " ")}</option>)}
@@ -1406,7 +1410,7 @@ const statusPill = {
   fontSize: 12.5, fontWeight: 700, border: "1.5px solid", background: "transparent",
 };
 
-function BillingTab({ enabled }) {
+function BillingTab({ enabled, viaMikeAi = false }) {
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -1452,7 +1456,7 @@ function BillingTab({ enabled }) {
       <div style={card}>
         <p style={sectionLabel}>Plan</p>
         <p style={{ fontSize: 20, fontWeight: 800, marginTop: 8 }}>
-          {isPro ? "DoerToughMoney Pro" : "Free"}
+          {isPro ? (viaMikeAi ? "Pro — included with Mike AI" : "DoerToughMoney Pro") : "Free"}
         </p>
         {isPro && pastDue && (
           <p style={{ fontSize: 13, color: C.red, marginTop: 4, fontWeight: 600 }}>
@@ -1479,6 +1483,7 @@ function BillingTab({ enabled }) {
                 "Insights — spending by category, and what changed since last month",
                 "Bills in one place, and which are worth renegotiating",
                 "Affordability — what's safe to spend before your next bills land",
+                "Included if you already pay for Mike AI",
               ].map((line) => (
                 <li key={line} style={{ display: "flex", gap: 8, fontSize: 13.5, color: C.muted, lineHeight: 1.45 }}>
                   <Check size={15} color={C.brand} style={{ flexShrink: 0, marginTop: 2 }} />
@@ -1486,7 +1491,7 @@ function BillingTab({ enabled }) {
                 </li>
               ))}
             </ul>
-            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>Cancel anytime.</p>
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>Cancel anytime. Already on Mike AI? That’s Pro here — no second charge.</p>
           </>
         )}
         {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
@@ -1540,7 +1545,11 @@ function Home({ initialAuthMode = "login" }) {
 
   // Only Mike sees this tab — isDoerBotOwner comes from the server (/api/me),
   // never guessed client-side, so no other account can even see it exists.
-  const visibleTabs = isDoerBotOwner ? [...TABS, { k: "doerbot", l: "DoerBot", Icon: Bot }] : TABS;
+  const visibleTabs = [
+    ...CORE_TABS,
+    ...(entitlements?.paid ? PRO_TABS : []),
+    ...(isDoerBotOwner ? [{ k: "doerbot", l: "DoerBot", Icon: Bot }] : []),
+  ];
 
   // ── passkey enrollment prompt ─────────────────────────────
   // Shown once per account, on a device that supports it, until the user
@@ -1703,7 +1712,7 @@ function Home({ initialAuthMode = "login" }) {
           {tab === "goals" && <GoalsTab />}
           {tab === "insights" && <InsightsTab onGoTab={setTab} />}
           {tab === "deals" && <DealsTab enabled={!!cfg.dealtoughEnabled} onGoTab={setTab} />}
-          {tab === "billing" && <BillingTab enabled={!!cfg.stripeEnabled} />}
+          {tab === "billing" && <BillingTab enabled={!!cfg.stripeEnabled} viaMikeAi={!!entitlements?.viaMikeAi} />}
           {tab === "doerbot" && isDoerBotOwner && <DoerBotTab />}
           {tab === "shared" && (
             openGroupId

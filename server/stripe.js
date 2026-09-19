@@ -5,12 +5,14 @@
 // and DoerToughMoney itself.
 import Stripe from "stripe";
 import prisma from "./db.js";
+import { DEFAULT_STRIPE_PRICE_ID } from "./entitlements.js";
 
 const STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY;
 const STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET;
-// The monthly Pro price's Stripe Price ID (price_...), created in the Stripe
-// dashboard — the actual dollar amount lives in Stripe, not here.
-const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID;
+const STRIPE_PRICE_ID = process.env.STRIPE_PRICE_ID || DEFAULT_STRIPE_PRICE_ID;
+const MIKE_AI_PRICE_IDS = String(
+  process.env.MIKE_AI_PRICE_IDS || "price_1UEEe8F68Jizq2F0X01jc4oN,price_1U8mooF68Jizq2F0YbR5zVvj"
+).split(",").map((s) => s.trim()).filter(Boolean);
 
 // Pinned rather than left to the account's dashboard default: Stripe's
 // "2025-03-31" API version moved current_period_end off the subscription
@@ -30,6 +32,33 @@ function stripe() {
 // only needs the secret key + its own signing secret (checked separately by
 // the route itself, since a misconfigured webhook shouldn't block checkout).
 export const stripeConfigured = () => !!(STRIPE_SECRET_KEY && STRIPE_PRICE_ID);
+
+const MIKE_ENTITLED = new Set(["trialing", "active", "past_due"]);
+
+export async function userHasMikeAiSubscription(user) {
+  if (!STRIPE_SECRET_KEY || !user?.email || MIKE_AI_PRICE_IDS.length === 0) return false;
+  const customers = await stripe().customers.list({ email: user.email, limit: 8 });
+  for (const customer of customers.data) {
+    const subs = await stripe().subscriptions.list({ customer: customer.id, status: "all", limit: 20 });
+    for (const sub of subs.data) {
+      if (!MIKE_ENTITLED.has(sub.status)) continue;
+      const prices = (sub.items?.data || []).map((item) => item.price?.id).filter(Boolean);
+      if (prices.some((id) => MIKE_AI_PRICE_IDS.includes(id))) return true;
+    }
+  }
+  return false;
+}
+
+export async function grantProIfMikeAi(user) {
+  if (!user?.id || String(user.subscriptionTier || "") === "pro") return false;
+  const hasMike = await userHasMikeAiSubscription(user);
+  if (!hasMike) return false;
+  await prisma.user.update({
+    where: { id: user.id },
+    data: { subscriptionTier: "pro", subscriptionStatus: "ACTIVE" },
+  });
+  return true;
+}
 
 // A Stripe Customer is created lazily on first checkout rather than at
 // signup — most users never subscribe, so most users never need one.
@@ -51,6 +80,9 @@ async function ensureCustomer(user) {
  */
 export async function createCheckoutSession(user, { successUrl, cancelUrl }) {
   if (!stripeConfigured()) throw new Error("Billing isn't configured yet.");
+  if (String(user?.subscriptionTier || "") === "pro" || await grantProIfMikeAi(user)) {
+    return successUrl || "/";
+  }
   const customerId = await ensureCustomer(user);
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",

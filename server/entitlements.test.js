@@ -32,6 +32,17 @@ describe("paywall disarmed (no PAYWALL_ENABLED)", () => {
     const e = await load();
     expect(e.canLinkAnotherBank(free, 99)).toBe(true);
   });
+
+  it("PAYWALL_ENABLED=0 stays off even with Stripe configured", async () => {
+    const e = await load({
+      PAYWALL_ENABLED: "0",
+      NODE_ENV: "production",
+      STRIPE_SECRET_KEY: "sk_test",
+      STRIPE_PRICE_ID: "price_x",
+    });
+    expect(e.paywallEnabled()).toBe(false);
+    expect(e.hasPaidAccess(free)).toBe(true);
+  });
 });
 
 describe("paywall armed", () => {

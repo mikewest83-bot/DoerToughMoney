@@ -38,7 +38,7 @@ import {
 } from "./insights.js";
 import { analyzeDeal, dealtoughConfigured } from "./dealtough.js";
 import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
-import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook } from "./stripe.js";
+import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook, grantProIfMikeAi } from "./stripe.js";
 import { doerbotConfigured, getDoerBotSummary } from "./doerbot.js";
 import { installMikeOwnerRoutes } from "./mike-owner.js";
 import { proRequired, hasPaidAccess, canLinkAnotherBank, upgradeRequired, freeBankLimit, paywallEnabled } from "./entitlements.js";
@@ -46,6 +46,7 @@ import { proRequired, hasPaidAccess, canLinkAnotherBank, upgradeRequired, freeBa
 validateProductionConfig();
 
 const app = express();
+app.disable("x-powered-by");
 app.set("trust proxy", 1); // behind Railway's proxy — needed for correct rate-limit IPs
 const allowedOrigins = new Set([process.env.WEB_ORIGIN, "http://localhost:5173", "http://127.0.0.1:5173"].filter(Boolean));
 app.use(cors({ origin: (origin, callback) => {
@@ -131,12 +132,19 @@ app.post("/api/webauthn/login/options", authLimiter, passkeyAuthOptions);
 app.post("/api/webauthn/login/verify", authLimiter, passkeyAuthVerify);
 
 // ── me ───────────────────────────────────────────────────
-app.get("/api/me", authRequired, (req, res) => {
+app.get("/api/me", authRequired, async (req, res) => {
   const isDoerBotOwner = Boolean(
     DOERBOT_OWNER_EMAIL && (req.user.email || "").toLowerCase() === DOERBOT_OWNER_EMAIL
   );
-  // Entitlement state is reported by the same code the routes gate on, so
-  // the UI can never show an unlocked feature the API would refuse.
+  let viaMikeAi = false;
+  if (!hasPaidAccess(req.user) && stripeConfigured()) {
+    try {
+      viaMikeAi = await grantProIfMikeAi(req.user);
+      if (viaMikeAi) req.user.subscriptionTier = "pro";
+    } catch (err) {
+      console.warn("[stripe] Mike AI bundle check failed:", err.message);
+    }
+  }
   res.json({
     user: publicUser(req.user),
     isDoerBotOwner,
@@ -144,6 +152,7 @@ app.get("/api/me", authRequired, (req, res) => {
       paid: hasPaidAccess(req.user),
       paywallEnabled: paywallEnabled(),
       freeBankLimit: freeBankLimit(),
+      viaMikeAi,
     },
   });
 });

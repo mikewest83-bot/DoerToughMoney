@@ -22,7 +22,8 @@
 // DealTough's current engine doesn't do. suggestBillNegotiation() below is a
 // clearly-marked stub for that — it needs real design + engine work in the
 // DealTough repo (or a new module) before this is more than a placeholder.
-const DEALTOUGH_API_URL = process.env.DEALTOUGH_API_URL; // e.g. https://dealtough-production.up.railway.app
+const DEALTOUGH_API_URL = process.env.DEALTOUGH_API_URL
+  || (process.env.NODE_ENV === "production" ? "https://dealtoughai.com" : "");
 
 export const dealtoughConfigured = () => !!DEALTOUGH_API_URL;
 

@@ -16,7 +16,10 @@ export function validateProductionConfig() {
   // syncing transactions will error until real keys are added.
   const plaidMissing = ["PLAID_CLIENT_ID", "PLAID_SECRET"].filter((name) => !process.env[name]);
   if (plaidMissing.length) {
-    console.warn(`[config] Missing Plaid env vars (${plaidMissing.join(", ")}) — bank linking and transaction sync will fail until they're set.`);
+    console.warn(`[config] Missing Plaid env vars (${plaidMissing.join(", ")}) — bank linking and transaction sync will fail until they're set on Railway.`);
+  }
+  if (process.env.NODE_ENV === "production" && !process.env.PLAID_TOKEN_ENCRYPTION_KEY) {
+    console.warn("[config] PLAID_TOKEN_ENCRYPTION_KEY is not set — do not accept live bank tokens until it is.");
   }
 }
 

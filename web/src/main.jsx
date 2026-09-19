@@ -18,16 +18,16 @@ function LaunchLanding({ onContinue }) {
 
       <section className="dt-hero">
         <div className="dt-hero-copy">
-          <div className="dt-eyebrow"><span /> Your money. Your decisions. Your advantage.</div>
+          <div className="dt-eyebrow"><span /> What’s safe to spend before the next bills.</div>
           <h1>Know what you can <em>safely spend.</em></h1>
           <p className="dt-hero-sub">
-            DoerToughMoney brings your accounts, bills, budgets, goals and spending into one clear picture — then helps you decide what to do next.
+            Connect a bank. See what’s left after bills. Check a purchase before you hand over cash.
           </p>
           <div className="dt-hero-actions">
-            <button className="dt-primary" onClick={() => onContinue("/signup")}>Get started — it’s free <span>→</span></button>
+            <button className="dt-primary" onClick={() => onContinue("/signup")}>Connect a bank — it’s free <span>→</span></button>
             <button className="dt-secondary" onClick={() => onContinue("/login")}>I already have an account</button>
           </div>
-          <div className="dt-trust"><span>✓</span> Connect a bank in about a minute <span>✓</span> Private by design <span>✓</span> No credit card required</div>
+          <div className="dt-trust"><span>✓</span> One bank free <span>✓</span> Private by design <span>✓</span> No credit card required</div>
         </div>
 
         <div className="dt-hero-preview" aria-label="DoerToughMoney financial dashboard preview">
@@ -41,9 +41,9 @@ function LaunchLanding({ onContinue }) {
       </section>
 
       <section className="dt-benefits">
-        <div><span className="dt-benefit-icon">$</span><h3>Safe to Spend</h3><p>See what’s actually available after bills and obligations.</p></div>
-        <div><span className="dt-benefit-icon">✦</span><h3>Doer Intelligence</h3><p>Turn raw transactions into useful decisions and next steps.</p></div>
-        <div><span className="dt-benefit-icon">%</span><h3>DealTough</h3><p>Spot opportunities to lower the costs you’re already paying.</p></div>
+        <div><span className="dt-benefit-icon">$</span><h3>Safe to Spend</h3><p>See what’s actually available after bills land.</p></div>
+        <div><span className="dt-benefit-icon">✦</span><h3>Bills in one place</h3><p>What’s due, what’s worth calling, what to leave alone.</p></div>
+        <div><span className="dt-benefit-icon">%</span><h3>Check a purchase</h3><p>Score the asking price against the market — and your cash — before you pay.</p></div>
       </section>
 
       {/* Every line here names something server/entitlements.js actually
@@ -61,10 +61,8 @@ function LaunchLanding({ onContinue }) {
             <div className="dt-plan-price">$0</div>
             <ul>
               <li>One connected bank</li>
-              <li>Accounts, balances and transactions</li>
-              <li>Budgets and goals</li>
-              <li>DealTough deal check</li>
-              <li>Shared expenses</li>
+              <li>Balances and transactions</li>
+              <li>Check a purchase</li>
             </ul>
             <button className="dt-secondary dt-plan-cta" onClick={() => onContinue("/signup")}>Get started free</button>
           </div>
@@ -80,13 +78,13 @@ function LaunchLanding({ onContinue }) {
               <li>Affordability — what&rsquo;s safe to spend before your next bills</li>
             </ul>
             <button className="dt-primary dt-plan-cta" onClick={() => onContinue("/signup")}>Start Pro — $9.99/mo</button>
-            <p className="dt-plan-note">Cancel anytime.</p>
+            <p className="dt-plan-note">Cancel anytime. Mike AI subscribers get Pro at no extra charge.</p>
           </div>
         </div>
       </section>
 
       <section className="dt-bottom-line">
-        <div><strong>One place for the money decisions that matter.</strong><span>Connect your bank. See the picture. Do the next right thing.</span></div>
+        <div><strong>One number: what’s safe to spend.</strong><span>Connect your bank. See the picture. Don’t overpay.</span></div>
         <button className="dt-primary dt-primary-small" onClick={() => onContinue("/signup")}>Build your money advantage <span>→</span></button>
       </section>
     </main>

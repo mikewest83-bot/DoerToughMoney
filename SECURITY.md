@@ -2,44 +2,33 @@
 
 ## Current Status
 
-DoerToughMoney is in **pre-launch** status as of 2026-08-19. All core systems are passing production readiness checks (migrations, builds, database schema), but the following security items must be completed before live user data is accepted.
+DoerToughMoney is in **pre-launch** status. Core systems pass production readiness checks. Plaid token encryption and Plaid webhook signature verification are **in the codebase**. Confirm the matching env vars are set on Railway before accepting live bank data.
 
 ## Pre-Launch Security Tasks
 
-### 🔴 CRITICAL: Plaid Access-Token Encryption
+### 🟢 Plaid Access-Token Encryption
 
-**Status**: Not yet implemented
-**Deadline**: Before accepting user data
+**Status**: Implemented in `server/plaid/tokenCrypto.js` (AES-256-GCM).
 
-Plaid access tokens are stored in the `PlaidItem.accessToken` field in plaintext. Before going live, these must be encrypted at rest using envelope encryption (e.g., AWS KMS, HashiCorp Vault, or a similar key management service).
+Set `PLAID_TOKEN_ENCRYPTION_KEY` to a 64-character hex string (32 bytes) before production bank data:
 
-- **Location**: `server/prisma/schema.prisma`, line 74
-- **Approach**: 
-  1. Add a `encryptedAccessToken` field to store encrypted data
-  2. Add a `keyVersion` field to support key rotation
-  3. Implement encrypt/decrypt helpers in a new `server/crypto.js` module
-  4. Update Plaid sync and token-refresh logic to use encrypted storage
-  5. Add a migration to encrypt existing tokens in place
+```
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
 
-**Why it matters**: If the database is compromised, plaintext Plaid access tokens allow an attacker to impersonate your users to their connected banks.
+Legacy plaintext tokens still decrypt during migration. Do not ship bank linking without this key.
+
+### 🟢 Plaid webhook signatures
+
+**Status**: Implemented in `server/plaid/webhook.js`. Unsigned or stale JWTs return 403.
 
 ### 🟡 HIGH: Dependency Security
 
-**Status**: 8 vulnerabilities in server dependencies, 5 in frontend (as of build 2026-08-19)
-
-Run `npm audit` in both `server/` and `web/` directories and apply patches:
-```bash
-cd server && npm audit fix
-cd ../web && npm audit fix
-```
-
-Most are transitive dependencies (old versions of `glob`, `uuid`, `node-domexception`). Use `npm audit fix --force` if necessary to upgrade breaking changes, but test against your schema first.
+Run `npm audit` in both `server/` and `web/` and apply patches.
 
 ### 🟡 MEDIUM: Prisma Version
 
-**Status**: v5.19.0 (current), v7.9.1+ available
-
-Consider upgrading Prisma to the latest major version. This is a planned upgrade but not a blocker to launch. Follow the official [migration guide](https://pris.ly/d/major-version-upgrade) and test against a replica of your production schema.
+Prisma v5.19.0 is current in-repo. Upgrade to 7.x is optional, not a launch blocker.
 
 ## Operational Security
 
@@ -71,7 +60,7 @@ All secrets are validated at startup; the server will refuse to boot if required
 ### Plaid Integration
 
 - **Scope**: Read-only access to accounts and transactions
-- **Webhooks**: Plaid sends transaction updates to `/api/webhooks/plaid`; signature validation is required (not yet implemented — add before going live)
+- **Webhooks**: Plaid sends transaction updates to `/api/webhooks/plaid`; JWT + body-hash verification is required and implemented in `server/plaid/webhook.js`.
 - **Token Refresh**: Handled automatically by Plaid; no manual refresh logic needed
 
 ### DealTough Integration
@@ -100,7 +89,7 @@ All secrets are validated at startup; the server will refuse to boot if required
 If you discover a security issue:
 
 1. **Do not open a public GitHub issue.**
-2. Email: [security@example.com](mailto:security@example.com) with:
+2. Email: [mike.west83@gmail.com](mailto:mike.west83@gmail.com) with:
    - Description of the vulnerability
    - Steps to reproduce
    - Potential impact
@@ -138,16 +127,18 @@ See `PRIVACY.md` for details on data use and retention.
 
 ## Security Checklist (Pre-Launch)
 
-- [ ] Plaid access-token encryption implemented
+- [x] Plaid access-token encryption implemented (set `PLAID_TOKEN_ENCRYPTION_KEY` on Railway)
 - [ ] `npm audit` run and vulnerabilities addressed
 - [ ] Prisma upgraded to v7.x (optional but recommended)
-- [ ] NODE_ENV validation passes on startup
-- [ ] JWT_SECRET is 32+ characters
-- [ ] DEALTOUGH_API_URL is configured
+- [x] NODE_ENV validation passes on startup
+- [x] JWT_SECRET is 32+ characters
+- [ ] DEALTOUGH_API_URL is configured (production defaults to https://dealtoughai.com)
 - [ ] PLAID_CLIENT_ID and PLAID_SECRET are configured
-- [ ] Plaid webhook signature validation implemented
+- [x] Plaid webhook signature validation implemented
 - [ ] 2FA considered (optional for launch)
 - [ ] Privacy and Terms pages reviewed and updated
+- [ ] PAYWALL_ENABLED=1 (or leave unset in production once Stripe keys are set)
+- [x] DoerToughMoney Pro default_price set on Stripe (`price_1UEiyvF68Jizq2F0FmlSFbN2`)
 
 ---
 

@@ -14,11 +14,20 @@
 //     verdict itself stays free for everyone: it's the hook, and it costs us
 //     nothing per call beyond DealTough's own budget.
 //
-// Deliberately inert until PAYWALL_ENABLED is set. Shipping this without the
-// variable changes nothing about how the app behaves, so the deploy can be
-// verified on its own before any user hits a wall. Flip the variable to arm
-// it. Same seam pattern as Mike AI's entitlements.mjs.
-const PAYWALL_ENABLED = String(process.env.PAYWALL_ENABLED || "").trim() === "1";
+// PAYWALL_ENABLED=1 forces the wall on. =0 forces it off. Unset in
+// production, the wall arms itself once Stripe billing is actually configured
+// so a live deploy with a price cannot leave every feature free by accident.
+// Vitest always requires an explicit "1" so unit tests stay inert.
+export const DEFAULT_STRIPE_PRICE_ID = "price_1UEiyvF68Jizq2F0FmlSFbN2";
+
+export function paywallEnabled() {
+  const raw = String(process.env.PAYWALL_ENABLED || "").trim();
+  if (raw === "1") return true;
+  if (raw === "0") return false;
+  if (process.env.VITEST) return false;
+  return process.env.NODE_ENV === "production"
+    && !!(process.env.STRIPE_SECRET_KEY && (process.env.STRIPE_PRICE_ID || DEFAULT_STRIPE_PRICE_ID));
+}
 
 // Owner keeps full access without paying himself. Reuses the variable that
 // already identifies him, so there's nothing new to set.
@@ -31,7 +40,6 @@ const FREE_BANK_LIMIT = Number.isFinite(Number(process.env.FREE_BANK_LIMIT))
   ? Number(process.env.FREE_BANK_LIMIT)
   : 1;
 
-export const paywallEnabled = () => PAYWALL_ENABLED;
 export const freeBankLimit = () => FREE_BANK_LIMIT;
 
 export function isOwner(user) {
@@ -49,7 +57,7 @@ export function isPro(user) {
 // The one question every gate asks. With the paywall disarmed this is true
 // for everyone, which is exactly what makes the deploy inert.
 export function hasPaidAccess(user) {
-  if (!PAYWALL_ENABLED) return true;
+  if (!paywallEnabled()) return true;
   if (!user) return false;
   if (isOwner(user)) return true;
   return isPro(user);
