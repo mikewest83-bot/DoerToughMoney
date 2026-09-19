@@ -32,6 +32,7 @@ import { idempotency } from "./idempotency.js";
 import { createLinkToken, exchangePublicToken, removeItem as removePlaidItem } from "./plaid/link.js";
 import { syncItem, syncAllForUser } from "./plaid/sync.js";
 import { plaidWebhook } from "./plaid/webhook.js";
+import { scanStaleConsent } from "./plaid/consent.js";
 import {
   spendingByCategory, periodSummary, monthOverMonth, topNegotiableBills,
   totalAvailableCents, totalDebtCents, budgetStatus, goalProgress,
@@ -207,9 +208,24 @@ app.post("/api/plaid/exchange", authRequired, plaidLimiter, idempotency, async (
 });
 
 app.get("/api/plaid/items", authRequired, async (req, res) => {
+  // At most once a week, re-read consent_expiration_time from Plaid so a
+  // missed PENDING_DISCONNECT webhook still surfaces as "reconnect by {date}".
+  if (plaidConfigured()) {
+    await scanStaleConsent(prisma, req.user.id).catch((e) => {
+      console.warn("[plaid] weekly consent scan:", e.message);
+    });
+  }
   const items = await prisma.plaidItem.findMany({
     where: { userId: req.user.id },
-    select: { id: true, institutionName: true, status: true, createdAt: true },
+    select: {
+      id: true,
+      institutionName: true,
+      status: true,
+      createdAt: true,
+      consentExpiresAt: true,
+      pendingDisconnectAt: true,
+      disconnectReason: true,
+    },
     orderBy: { createdAt: "desc" },
   });
   res.json({ items });

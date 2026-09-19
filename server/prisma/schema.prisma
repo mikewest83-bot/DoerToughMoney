@@ -144,6 +144,12 @@ model PlaidItem {
   // Cursor for Plaid's /transactions/sync — persisted between syncs so each
   // call only fetches what changed since last time instead of the full history.
   transactionsCursor String?
+  // US/CA PENDING_DISCONNECT (or UK/EU PENDING_EXPIRATION) deadline so the
+  // banks list can say "reconnect by {date}" instead of dying silently.
+  consentExpiresAt     DateTime?
+  pendingDisconnectAt  DateTime?
+  disconnectReason     String?
+  consentScannedAt     DateTime?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 

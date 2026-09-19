@@ -21,6 +21,19 @@ const pageBg = `radial-gradient(900px circle at 12% -8%, ${C.brandSoft} 0%, tran
 const money = (n) => Number(n || 0).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const CADENCE_LABEL = { WEEKLY: "Weekly", MONTHLY: "Monthly", YEARLY: "Yearly", UNKNOWN: "One-off" };
 
+function bankStatusLine(it) {
+  const by = it.consentExpiresAt
+    ? new Date(it.consentExpiresAt).toLocaleDateString("en-US", { month: "short", day: "numeric" })
+    : null;
+  if (it.status === "REAUTH_REQUIRED") {
+    return by ? `Reconnect by ${by}` : "Needs reconnecting";
+  }
+  if (it.status === "ACTIVE") {
+    return by ? `Connected · consent through ${by}` : "Connected";
+  }
+  return "Connection issue";
+}
+
 const fontStyle = (
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,700;12..96,800&family=Inter:wght@400;500;600;700&family=Space+Mono:wght@700&display=swap');
@@ -593,7 +606,7 @@ function AccountsTab({ onChanged, userId, autoConnect = false }) {
           <div style={{ flex: 1, minWidth: 0 }}>
             <p style={{ margin: 0, fontSize: 14.5, fontWeight: 600 }}>{it.institutionName || "Bank"}</p>
             <p style={{ margin: 0, fontSize: 12.5, color: it.status === "ACTIVE" ? C.green : C.amber }}>
-              {it.status === "ACTIVE" ? "Connected" : it.status === "REAUTH_REQUIRED" ? "Needs reconnecting" : "Connection issue"}
+              {bankStatusLine(it)}
             </p>
           </div>
           <button onClick={() => removeItem(it.id)} style={iconBtn} title="Remove"><Trash2 size={16} color={C.muted} /></button>

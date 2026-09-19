@@ -7,6 +7,7 @@
 import { plaid } from "./client.js";
 import { syncItem, syncAccounts } from "./sync.js";
 import { syncRecurring } from "./recurring.js";
+import { webhookConsentPatch } from "./consent.js";
 import crypto from "crypto";
 import jwt from "jsonwebtoken";
 
@@ -113,11 +114,11 @@ export async function handlePlaidWebhook(prisma, body) {
   const actions = classifyPlaidWebhook(body);
   if (!item) return actions;
 
-  if (actions.itemStatus) {
-    await prisma.plaidItem.update({
-      where: { id: item.id },
-      data: { status: actions.itemStatus },
-    });
+  const consentPatch = webhookConsentPatch(body, actions);
+  const data = { ...consentPatch };
+  if (actions.itemStatus) data.status = actions.itemStatus;
+  if (Object.keys(data).length) {
+    await prisma.plaidItem.update({ where: { id: item.id }, data });
   }
 
   if (actions.syncAccounts) {
