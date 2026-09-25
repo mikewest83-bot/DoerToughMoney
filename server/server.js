@@ -42,6 +42,7 @@ import { computeSafeToSpendCents, assessPurchase } from "./affordability.js";
 import { stripeConfigured, createCheckoutSession, createPortalSession, stripeWebhook, grantProIfMikeAi } from "./stripe.js";
 import { doerbotConfigured, getDoerBotSummary } from "./doerbot.js";
 import { installMikeOwnerRoutes } from "./mike-owner.js";
+import { moneyBridgeStatus, requireMikeBridge } from "./mike-bridge.js";
 import { proRequired, hasPaidAccess, canLinkAnotherBank, upgradeRequired, freeBankLimit, paywallEnabled } from "./entitlements.js";
 
 validateProductionConfig();
@@ -109,6 +110,21 @@ app.get("/api/config", (_req, res) => {
     // mail provider the link could only ever dead-end.
     passwordResetEnabled: mailConfigured(),
   });
+});
+
+// Private, read-only operational bridge for Mike AI. It exposes configuration
+// state only—never bank data, access tokens, customer records, or credentials.
+app.get("/api/mike-bridge/v1/status", requireMikeBridge, (_req, res) => {
+  res.set("Cache-Control", "private, no-store");
+  res.set("Vary", "Authorization");
+  res.json(moneyBridgeStatus({
+    google: googleConfigured(),
+    mail: mailConfigured(),
+    plaid: plaidConfigured(),
+    dealTough: dealtoughConfigured(),
+    stripe: stripeConfigured(),
+    doerBot: doerbotConfigured(),
+  }));
 });
 
 // ── auth ─────────────────────────────────────────────────
