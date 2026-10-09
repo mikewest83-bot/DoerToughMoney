@@ -87,7 +87,7 @@ export async function createCheckoutSession(user, { successUrl, cancelUrl }) {
   const managedPayments = process.env.STRIPE_MANAGED_PAYMENTS_ENABLED === "true";
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",
-    ...(managedPayments ? { managed_payments: { enabled: true } } : {}),
+    ...(managedPayments ? { managed_payments: { enabled: true }, integration_identifier: "doertoughmoney-qpwvnmrt" } : {}),
     customer: customerId,
     line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
     success_url: successUrl,
