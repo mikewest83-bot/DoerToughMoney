@@ -1504,7 +1504,7 @@ function BillingTab({ enabled, viaMikeAi = false }) {
                 </li>
               ))}
             </ul>
-            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>Cancel anytime. Already on Mike AI? That’s Pro here — no second charge.</p>
+            <p style={{ fontSize: 12.5, color: C.muted, marginTop: 10 }}>Renews monthly until canceled. Applicable tax is shown at checkout. Cancel through Manage billing before renewal. Already on Mike AI? That’s Pro here — no second charge.</p>
           </>
         )}
         {err && <p style={{ color: C.red, fontSize: 13, marginTop: 10 }}>{err}</p>}
@@ -1512,6 +1512,7 @@ function BillingTab({ enabled, viaMikeAi = false }) {
           style={{ width: "100%", marginTop: 14, padding: 14, borderRadius: 14, border: "none", background: C.brand, color: "#fff", fontWeight: 700, fontSize: 15.5, opacity: busy ? 0.6 : 1 }}>
           {busy ? "…" : isPro ? "Manage billing" : "Upgrade to Pro"}
         </button>
+        <p style={{ fontSize: 12.5, color: C.muted }}><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds and cancellation</a></p>
       </div>
     </div>
   );
@@ -1739,7 +1740,7 @@ function Home({ initialAuthMode = "login" }) {
 }
 
 // ── Legal pages ───────────────────────────────────────────
-// Placeholder copy — NOT reviewed by a lawyer.
+// Published service policies; keep these aligned with billing and data flows.
 function LegalPage({ title, updated, sections }) {
   // Every route is served by the same index.html, so without this /terms and
   // /privacy would share the landing page's title verbatim — duplicate titles
@@ -1753,9 +1754,8 @@ function LegalPage({ title, updated, sections }) {
         <a href="/" style={{ color: C.brand, fontWeight: 700, fontSize: 14, textDecoration: "none" }}>← Back to DoerToughMoney</a>
         <h1 style={{ fontFamily: "'Bricolage Grotesque',sans-serif", fontSize: 30, fontWeight: 800, marginTop: 16, marginBottom: 4 }}>{title}</h1>
         <p style={{ color: C.muted, fontSize: 13, marginBottom: 8 }}>Last updated {updated}</p>
-        <div style={{ background: "#FFF6E5", border: "1px solid #F0DDB0", borderRadius: 12, padding: "12px 14px", fontSize: 13, color: "#8A6416", marginBottom: 24 }}>
-          Template placeholder — this has not been reviewed by a lawyer. Replace with counsel-drafted terms before relying on it.
-        </div>
+        <p style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Operated by Doer Tough LLC. Contact: <a href="mailto:support@doertoughmikeai.com">support@doertoughmikeai.com</a></p>
+        <nav aria-label="Legal policies" style={{ marginBottom: 24 }}><a href="/terms">Terms</a> · <a href="/privacy">Privacy</a> · <a href="/refunds">Refunds and cancellation</a></nav>
         {sections.map(({ heading, body }) => (
           <section key={heading} style={{ marginBottom: 22 }}>
             <h2 style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>{heading}</h2>
@@ -1769,32 +1769,43 @@ function LegalPage({ title, updated, sections }) {
 
 function TermsPage() {
   return (
-    <LegalPage title="Terms of Service" updated="August 2026" sections={[
+    <LegalPage title="Terms of Service" updated="October 9, 2026" sections={[
       { heading: "1. What DoerToughMoney is", body: "DoerToughMoney is a personal finance app. You can link your bank accounts (via our provider, Plaid) to see balances and transactions, track bills, set budgets and goals, and use DealTough — our savings and negotiation feature — to check whether a purchase is a good deal. DoerToughMoney does not send, hold, or transmit money on your behalf and is not a money transmitter." },
       { heading: "2. Shared expenses", body: "You can track shared expenses with a group and record who owes whom. \"Settling up\" in DoerToughMoney simply records that a cash payment happened outside the app — DoerToughMoney does not move any money between users." },
       { heading: "3. Your account", body: "You must be at least 18 years old and provide accurate information when registering. You're responsible for keeping your password secure and for all activity on your account." },
       { heading: "4. Linked accounts", body: "When you connect a bank account, DoerToughMoney receives read-only account and transaction data through Plaid. We don't store your bank login credentials." },
       { heading: "5. DealTough", body: "DealTough purchase analysis is provided by a separate DealTough service and reflects its own market data and methodology. It's informational only, not financial advice, and we don't guarantee its accuracy." },
+      { heading: "Subscriptions and tax", body: "Pro is a monthly subscription at the price and currency shown at checkout. It renews automatically until canceled. Applicable sales tax, VAT, or GST is displayed before you confirm payment and is added unless checkout states it is included. Review the total and renewal terms before subscribing. Qualifying Mike AI access may include Pro without a separate DoerToughMoney subscription." },
+      { heading: "Cancellation and payment support", body: "Open the Pro tab and select Manage billing to cancel a separately purchased subscription or update payment details. Cancel before the next renewal to avoid the next charge. If you cannot access billing, email support@doertoughmikeai.com. See /refunds for refund requests. If your access is included through Mike AI, manage the underlying subscription in Mike AI." },
+      { heading: "Purchases sold through Link", body: "Where checkout identifies a purchase as sold through Link, Stripe acts as merchant of record and handles payment processing, applicable indirect taxes, receipts, and transaction support. Doer Tough LLC provides the app and product support. You can manage these purchases at https://link.com and contact https://support.link.com/topics/sold-through-link. The payment terms displayed at checkout apply." },
+      { heading: "Your rights", body: "Nothing in these terms excludes rights, warranties, or remedies that applicable law does not allow us to exclude. We will provide notice of material changes as required by law. Changes do not retroactively remove rights relating to earlier purchases." },
       { heading: "6. Prohibited use", body: "You agree not to use DoerToughMoney for illegal activity or fraud, or to try to circumvent these terms. We may suspend or close accounts that violate this." },
       { heading: "7. Limitation of liability", body: "DoerToughMoney is provided \"as is.\" To the extent permitted by law, we are not liable for indirect or consequential damages arising from your use of the service." },
       { heading: "8. Changes", body: "We may update these terms from time to time. Continued use of DoerToughMoney after changes take effect means you accept the updated terms." },
-      { heading: "9. Contact", body: "Questions about these terms? Reach out via the contact details on our website." },
+      { heading: "9. Contact", body: "Questions about these terms? Email support@doertoughmikeai.com." },
     ]} />
   );
 }
 
 function PrivacyPage() {
   return (
-    <LegalPage title="Privacy Policy" updated="August 2026" sections={[
+    <LegalPage title="Privacy Policy" updated="October 9, 2026" sections={[
       { heading: "1. What we collect", body: "Account info you give us (name, handle, email, password — stored as a salted hash, never in plain text). Bank account and transaction data from Plaid, if you choose to connect a bank. Bills, budgets, and goals you enter. Shared-expense data (who owes whom in a group). Technical data (IP address, device/browser info) for security and fraud prevention." },
       { heading: "2. How we use it", body: "To operate your account, show your balances/transactions/insights, run DealTough purchase checks you request, communicate with you about your account, detect and prevent fraud, and comply with legal obligations." },
-      { heading: "3. Sharing", body: "We share what's necessary with Plaid to link and sync your bank accounts, and with DealTough to analyze a purchase you ask about. We don't sell your personal data to third parties." },
+      { heading: "3. Sharing", body: "We share necessary information with Plaid to connect and sync bank accounts, DealTough for purchase checks you request, Stripe for billing and tax, Railway for hosting and storage, and Resend for account emails. When you use connected Mike AI features, information needed for those features may be processed by Mike AI and its service providers under the Mike AI privacy policy. We do not sell your personal data to third parties." },
+      { heading: "Payments", body: "Stripe receives contact, billing address, payment, and tax details supplied at checkout, along with order and subscription information. For purchases sold through Link, Stripe acts as merchant of record. See https://stripe.com/privacy. We receive billing records and payment status, not your full card number." },
+      { heading: "Retention and shared information", body: "We retain account and financial records as needed to provide the service, handle support, meet legal obligations, and resolve disputes. Disconnecting a bank stops that connection; it does not by itself request deletion of all previously imported records. Contact us to request account deletion, subject to legal retention requirements. Information you add to shared groups is visible to members of those groups." },
+      { heading: "Storage and your rights", body: "The app uses browser storage and authentication information to keep you signed in and remember app preferences. Depending on where you live, you may have additional rights to access, correct, delete, or obtain a copy of personal information, or to object to or restrict certain processing. Contact support@doertoughmikeai.com to exercise applicable rights. Service providers may process data outside your country." },
       { heading: "4. Your choices", body: "You can disconnect a linked bank account at any time from the Accounts tab. You can request a copy of your data or ask us to delete your account." },
       { heading: "5. Security", body: "Passwords are hashed with bcrypt. We don't store your bank login credentials — Plaid handles that connection directly. We use industry-standard practices to protect your data, but no system is 100% secure." },
-      { heading: "6. Changes", body: "We may update this policy from time to time; continued use of DoerToughMoney after changes take effect means you accept the updated policy." },
-      { heading: "7. Contact", body: "Questions about your data? Reach out via the contact details on our website." },
+      { heading: "6. Changes", body: "We will post the updated policy and date when our practices change and provide additional notice or obtain consent where required by applicable law." },
+      { heading: "7. Contact", body: "For privacy questions, access, correction, deletion, or complaints, email support@doertoughmikeai.com. We may verify your identity before acting on a request." },
     ]} />
   );
+}
+
+function RefundsPage() {
+  return <LegalPage title="Refunds and cancellation" updated="October 9, 2026" sections={[{"heading": "Cancel your subscription", "body": "For a separately purchased Pro subscription, open the Pro tab and choose Manage billing. Cancel before renewal to prevent the next charge. Access continues until the end of the paid period unless a refund or other adjustment changes that date. If Pro is included with Mike AI, manage the underlying subscription in Mike AI."}, {"heading": "Refund requests", "body": "Email support@doertoughmikeai.com from your account email with the purchase date and reason for your request. Do not send full card numbers or bank login details. Contact us promptly about duplicate charges, charges after cancellation, or paid access that was not provided. We will review requests against the purchase terms and applicable law; cancellation alone does not automatically refund earlier charges."}, {"heading": "Purchases sold through Link", "body": "For purchases identified as sold through Link, you may also request payment or refund support at https://support.link.com/topics/sold-through-link. Stripe may process refunds under its applicable terms. Approved refunds are returned through the payment provider to the original payment method where supported; posting times vary."}, {"heading": "Consumer rights", "body": "Nothing in this policy limits mandatory cancellation, refund, warranty, or other rights under applicable law."}]} />;
 }
 
 // ── /reset?token=… ───────────────────────────────────────
@@ -1882,6 +1893,7 @@ export default function App() {
   const path = window.location.pathname;
   if (path === "/terms") return <TermsPage />;
   if (path === "/privacy") return <PrivacyPage />;
+  if (path === "/refunds") return <RefundsPage />;
   if (path === "/reset") return <ResetPasswordPage />;
   const isSignup = path === "/signup" || new URLSearchParams(window.location.search).get("signup") === "1";
   return <>{<Home initialAuthMode={isSignup ? "register" : "login"} />}<IosInstallBanner /></>;

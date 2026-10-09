@@ -84,8 +84,10 @@ export async function createCheckoutSession(user, { successUrl, cancelUrl }) {
     return successUrl || "/";
   }
   const customerId = await ensureCustomer(user);
+  const managedPayments = process.env.STRIPE_MANAGED_PAYMENTS_ENABLED === "true";
   const session = await stripe().checkout.sessions.create({
     mode: "subscription",
+    ...(managedPayments ? { managed_payments: { enabled: true }, integration_identifier: "doertoughmoney-qpwvnmrt" } : {}),
     customer: customerId,
     line_items: [{ price: STRIPE_PRICE_ID, quantity: 1 }],
     success_url: successUrl,
@@ -95,7 +97,7 @@ export async function createCheckoutSession(user, { successUrl, cancelUrl }) {
     // this metadata first and only falls back to matching on customer id.
     subscription_data: { metadata: { userId: user.id } },
     allow_promotion_codes: true,
-  });
+  }, managedPayments ? { apiVersion: "2026-08-26.dahlia" } : undefined);
   return session.url;
 }
 
